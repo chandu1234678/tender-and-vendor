@@ -1,5 +1,6 @@
 ---
 title: Vendor Comparison Platform (Local)
+author: chandu1234678
 ---
 
 <!-- Auto-generated site index: copied from README.md -->
@@ -7,6 +8,8 @@ title: Vendor Comparison Platform (Local)
 # Vendor Comparison Platform (Local)
 
 A small, local-first tool to parse vendor PDF proposals and a master Excel checklist, evaluate compliance using a multi-agent evaluator (or simple heuristics), persist results to a local SQLite store, and generate a styled Excel comparison matrix. It includes an optional Streamlit review console for human-in-the-loop overrides.
+
+**Author:** [chandu1234678](https://github.com/chandu1234678)
 
 **Key goals:** secure local processing, layout-aware PDF parsing, repeatable evaluation, and a simple human review loop.
 
