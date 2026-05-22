@@ -1,0 +1,41 @@
+# Folder Structure
+
+- config/
+  - settings.example.yaml
+- data/
+  - incoming/
+  - parsed/
+  - output/
+- docs/
+  - architecture.md
+  - folder-structure.md
+- scripts/
+  - bootstrap.ps1
+  - run_api.ps1
+  - run_pipeline.ps1
+  - run_review.ps1
+- src/
+  - app/
+    - api.py
+    - run_pipeline.py
+  - config/
+    - __init__.py
+  - engine/
+    - agents.py
+    - judge.py
+    - orchestrator.py
+    - prompts.py
+  - ingest/
+    - excel_parser.py
+    - ocr.py
+    - pdf_parser.py
+  - reporting/
+    - excel_report.py
+  - storage/
+    - db.py
+    - schema.sql
+  - ui/
+    - review_app.py
+  - utils/
+    - logging.py
+    - paths.py
