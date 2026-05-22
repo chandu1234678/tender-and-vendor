@@ -91,11 +91,11 @@ The repository includes the original UML PNG exports in `docs/uml/` for a visual
 
 - **State machine / high-level flow**
 
-	<a href="docs/uml/optimized/state-machine-bhel-1200.png"><img src="docs/uml/optimized/state-machine-bhel-600.png" alt="State Machine Diagram for BHEL" style="max-width:100%;height:auto;border:1px solid #444"/></a>
+	<a href="https://raw.githubusercontent.com/chandu1234678/tender-and-vendor/main/docs/uml/optimized/state-machine-bhel-1200.png"><img src="https://raw.githubusercontent.com/chandu1234678/tender-and-vendor/main/docs/uml/optimized/state-machine-bhel-600.png" alt="State Machine Diagram for BHEL" style="max-width:100%;height:auto;border:1px solid #444"/></a>
 
 - **Detailed sequence / pipeline**
 
-	<a href="docs/uml/optimized/sequence-diagram-bhel-1200.png"><img src="docs/uml/optimized/sequence-diagram-bhel-600.png" alt="Sequence diagram for BHEL" style="max-width:100%;height:auto;border:1px solid #444"/></a>
+	<a href="https://raw.githubusercontent.com/chandu1234678/tender-and-vendor/main/docs/uml/optimized/sequence-diagram-bhel-1200.png"><img src="https://raw.githubusercontent.com/chandu1234678/tender-and-vendor/main/docs/uml/optimized/sequence-diagram-bhel-600.png" alt="Sequence diagram for BHEL" style="max-width:100%;height:auto;border:1px solid #444"/></a>
 
 ## Notes & Next Steps
 - If you want, I can:
