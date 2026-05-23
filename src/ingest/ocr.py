@@ -1,11 +1,17 @@
+
 import pytesseract
 from PIL import Image
 import fitz
 from pathlib import Path
 from typing import Optional
+import os
 
 
-MAX_PDF_BYTES = 50 * 1024 * 1024  # 50 MB
+# Allow override via environment variable (bytes). Defaults to 50 MB.
+try:
+    MAX_PDF_BYTES = int(os.environ.get("MAX_PDF_BYTES", 50 * 1024 * 1024))
+except Exception:
+    MAX_PDF_BYTES = 50 * 1024 * 1024
 
 
 def ocr_pdf_if_needed(pdf_path: str) -> Optional[str]:

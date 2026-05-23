@@ -1,9 +1,15 @@
+
 from typing import List, Dict
 from pathlib import Path
 import fitz
+import os
 
 
-MAX_PDF_BYTES = 50 * 1024 * 1024  # 50 MB
+# Allow override via environment variable (bytes). Defaults to 50 MB.
+try:
+    MAX_PDF_BYTES = int(os.environ.get("MAX_PDF_BYTES", 50 * 1024 * 1024))
+except Exception:
+    MAX_PDF_BYTES = 50 * 1024 * 1024
 
 
 def parse_pdf_blocks(pdf_path: str) -> List[Dict]:

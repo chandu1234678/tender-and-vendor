@@ -1,3 +1,42 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Environment / secrets
+.env
+.env.*
+
+# Project data (do not push)
+data/
+
+# SQLite databases and outputs
+*.db
+data/*.db
+data/output/
+data/parsed/
+
+# Editor directories
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# build / distribution
+dist/
+build/
+*.egg-info/
+
+# logs
+*.log
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

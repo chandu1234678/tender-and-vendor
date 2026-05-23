@@ -11,6 +11,8 @@ CREATE TABLE IF NOT EXISTS compliance_matrix (
     vendor_id TEXT NOT NULL,
     status TEXT NOT NULL,
     citation TEXT NOT NULL,
+    citation_doc_id TEXT,
+    citation_excerpt TEXT,
     reasoning TEXT NOT NULL,
     confidence REAL NOT NULL,
     PRIMARY KEY (spec_id, vendor_id)
@@ -24,5 +26,18 @@ CREATE TABLE IF NOT EXISTS autonomous_feedback_loop (
     corrected_status TEXT NOT NULL,
     justification TEXT NOT NULL,
     context TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS training_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    spec_id TEXT NOT NULL,
+    vendor_id TEXT NOT NULL,
+    doc_id TEXT,
+    page INTEGER,
+    bbox TEXT,
+    excerpt TEXT,
+    label TEXT,
+    processed INTEGER DEFAULT 0,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
