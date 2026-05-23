@@ -1,0 +1,20 @@
+paths:
+  data_incoming: "data/incoming"
+  data_parsed: "data/parsed"
+  data_output: "data/output"
+  db_path: "data/parsed/app.db"
+
+model:
+  runtime: "ollama"
+  # Updated to an installed Ollama model present on the machine.
+  # If you prefer a different model, change this back or run `ollama pull <model>`.
+  name: "qwen2.5-coder:1.5b"
+  temperature: 0.0
+
+ocr:
+  enabled: true
+  tesseract_cmd: ""
+
+security:
+  air_gapped: true
+  outbound_block_required: true

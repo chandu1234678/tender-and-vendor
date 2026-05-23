@@ -33,4 +33,5 @@ def parse_pdf_blocks(pdf_path: str) -> List[Dict]:
             if not text:
                 continue
             blocks.append({"page": page_no, "bbox": [x0, y0, x1, y1], "text": text})
+    blocks.sort(key=lambda block: (block["page"], block["bbox"][1], block["bbox"][0]))
     return blocks

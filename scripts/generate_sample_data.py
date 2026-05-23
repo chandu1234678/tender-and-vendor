@@ -9,8 +9,8 @@ INCOMING.mkdir(parents=True, exist_ok=True)
 # create master spec excel
 master = INCOMING / "master_spec.xlsx"
 df = pd.DataFrame([
-    {"Spec_ID": "SPEC-01", "Parameter_Name": "Max Operating Temp", "BHEL_Requirement": "Must withstand at least 600°C continuously."},
-    {"Spec_ID": "SPEC-02", "Parameter_Name": "Hydrostatic Pressure", "BHEL_Requirement": "Shell must withstand 60 bar total pressure."},
+    {"Spec_ID": "SPEC-01", "Parameter_Name": "Max Operating Temp", "company_Requirement": "Must withstand at least 600°C continuously."},
+    {"Spec_ID": "SPEC-02", "Parameter_Name": "Hydrostatic Pressure", "company_Requirement": "Shell must withstand 60 bar total pressure."},
 ])
 df.to_excel(master, index=False)
 

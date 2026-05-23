@@ -1,0 +1,12 @@
+{
+  "name": "Run Tests on Engine Edit",
+  "version": "1.0.0",
+  "when": {
+    "type": "fileEdited",
+    "patterns": ["src/engine/**/*.py", "src/ingest/**/*.py"]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "A core engine or ingest file was edited. Check if the corresponding test file in tests/ needs to be updated to match the new logic. If tests exist, run them mentally and flag any that would now fail."
+  }
+}

@@ -3,6 +3,17 @@ from pathlib import Path
 import os
 
 
+def _table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
+    cursor = conn.execute(f"PRAGMA table_info({table_name})")
+    return {row[1] for row in cursor.fetchall()}
+
+
+def _ensure_column(conn: sqlite3.Connection, table_name: str, column_name: str, column_sql: str) -> None:
+    if column_name in _table_columns(conn, table_name):
+        return
+    conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_sql}")
+
+
 def get_connection(db_path: str) -> sqlite3.Connection:
     """Return a hardened sqlite3 connection with safe PRAGMAs applied.
 
@@ -55,3 +66,7 @@ def init_db(db_path: str) -> None:
     with get_connection(str(db_file)) as conn:
         with open(schema_path, "r", encoding="utf-8") as f:
             conn.executescript(f.read())
+        _ensure_column(conn, "compliance_matrix", "citation_doc_id", "citation_doc_id TEXT")
+        _ensure_column(conn, "compliance_matrix", "citation_excerpt", "citation_excerpt TEXT")
+        _ensure_column(conn, "compliance_matrix", "citation_page", "citation_page INTEGER")
+        _ensure_column(conn, "compliance_matrix", "citation_bbox", "citation_bbox TEXT")

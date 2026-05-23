@@ -28,8 +28,8 @@ def _verify_token(token: str) -> bool:
 
 
 def run() -> None:
-    st.set_page_config(layout="wide", page_title="BHEL Review Console")
-    st.title("BHEL Vendor Compliance Review")
+    st.set_page_config(layout="wide", page_title="company Review Console")
+    st.title("company Vendor Compliance Review")
 
     # Authentication gate: require REVIEW_TOKEN or a JWT signed with SECRET_KEY if those are set.
     review_token_present = bool(os.environ.get('REVIEW_TOKEN') or os.environ.get('SECRET_KEY'))

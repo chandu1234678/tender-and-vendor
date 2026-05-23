@@ -1,110 +1,135 @@
-# Tender and vendor (Local)
+# Tender & Vendor Compliance Platform
 
-A small, local-first tool to parse vendor PDF proposals and a master Excel checklist, evaluate compliance using a multi-agent evaluator (or simple heuristics), persist results to a local SQLite store, and generate a styled Excel comparison matrix. It includes an optional Streamlit review console for human-in-the-loop overrides.
+Local-first Python tooling for BHEL-style procurement compliance review.
+It parses a master spec workbook and vendor PDFs, evaluates each spec/vendor pair,
+stores the results in SQLite, generates a color-coded Excel report, and provides a
+Streamlit review console for human overrides.
 
-**Author:** [chandu1234678](https://github.com/chandu1234678)
+## What it does
+- Parses the master Excel checklist and normalizes sheet-based spec rows.
+- Extracts layout-aware text blocks from vendor PDFs with PyMuPDF.
+- Falls back to OCR when needed.
+- Runs a multi-agent compliance evaluation pipeline with heuristic fallback.
+- Optionally enriches fallback checks with a web search API and can fall back to Grok when Ollama is unavailable.
+- Persists verdicts, citations, feedback, and run history in SQLite.
+- Builds a downloadable Excel report with Matrix, Details, and Summary sheets.
+- Exposes a JWT-protected FastAPI interface for uploads, pipeline runs, results, and report download.
+- Provides a Streamlit review console for manual review and overrides.
+- Provides a React/Vite review dashboard for a more dynamic browser UI.
 
-**Key goals:** secure local processing, layout-aware PDF parsing, repeatable evaluation, and a simple human review loop.
+## Repository Layout
+- `src/app/` - FastAPI app and pipeline runner.
+- `src/engine/` - prompts, agents, judge, and orchestrator.
+- `src/ingest/` - Excel, PDF, and OCR ingestion.
+- `src/reporting/` - Excel report builder.
+- `src/storage/` - SQLite setup and schema.
+- `src/ui/` - Streamlit review console.
+- `frontend/` - React + Vite dashboard implemented with JSX.
+- `src/utils/` - logging and path helpers.
+- `data/incoming/` - drop the master workbook and vendor PDFs here.
+- `data/parsed/` - SQLite database output.
+- `data/output/` - generated Excel report.
 
-## Quick Start (Windows)
-- Install Python dependencies:
-
+## Quick Start
+### Windows PowerShell
 ```powershell
-pip install -r requirements.txt
+scripts\bootstrap.ps1 -InstallDevDependencies -GenerateSampleData
+streamlit run src/ui/review_app.py
 ```
 
-- Prepare input files in `data/incoming/`:
-	- A master checklist Excel (`*.xlsx`) with columns like `Spec_ID`, `Parameter_Name`, `BHEL_Requirement`.
-	- Vendor proposal PDFs (`*.pdf`).
-
-- Run the pipeline (PowerShell script or directly):
-
-```powershell
-# using provided script
-scripts\run_pipeline.ps1
-
-# or directly
-python -m src.main
+### Bash / Git Bash / WSL
+```bash
+bash scripts/bootstrap.sh
+streamlit run src/ui/review_app.py
 ```
 
-- To view the review console (Streamlit):
+## Run the pipeline
+After placing files into `data/incoming/`, run:
 
+```powershell
+python -m src.app.run_pipeline
+```
+
+The report is written to `data/output/vendor_comparison_matrix.xlsx`.
+
+## Run the API
+```powershell
+uvicorn src.app.api:app --reload
+```
+
+Auth is JWT-based. Use `POST /token` to get a bearer token, then call the protected endpoints:
+- `POST /upload`
+- `POST /run-pipeline`
+- `GET /status/{run_id}`
+- `GET /results`
+- `GET /report`
+
+## Run the review UI
 ```powershell
 streamlit run src/ui/review_app.py
 ```
 
-## Files & Structure
-- `src/app/` — FastAPI app and pipeline entrypoint helpers.
-- `src/ingest/` — `excel_parser.py`, `pdf_parser.py` (PyMuPDF) for layout-aware extraction.
-- `src/evaluator.py` — `MultiAgentEvaluator` (uses Ollama if installed; falls back to simple heuristics).
-- `src/storage/` — SQLite initialization and `schema.sql`.
-- `src/reporting/` — build a styled Excel `vendor_comparison_matrix.xlsx` using `openpyxl`/`pandas`.
-- `src/ui/` — Streamlit-based review console for overrides and feedback loop.
-- `src/utils/` — small helpers for logging and paths.
+Set `REVIEW_TOKEN` or `SECRET_KEY` before starting if you want the review console gated.
 
-## Architecture (High-level)
-The following Mermaid diagrams show the main components and the evaluation sequence.
+## Run the React UI
+```powershell
+cd frontend
+npm install
+npm run dev
+```
 
-### Component Diagram
+The app expects the FastAPI backend at `http://127.0.0.1:8000` by default.
+If your API runs elsewhere, set `VITE_API_BASE_URL` before starting Vite.
 
+## Tests
+```powershell
+python -m pytest -q tests
+```
+
+## Architecture
 ```mermaid
 flowchart TB
-	A["Incoming files<br/> (data/incoming)"] --> B["Ingest Parsers<br/> (excel_parser, pdf_parser)"]
-	B --> C["Evaluator<br/> (MultiAgentEvaluator)"]
-	C --> D["SQLite Store<br/> (data/parsed/app.db)"]
-	D --> E["Reporting<br/> (excel_report)"]
-	D --> F["UI Review<br/> (streamlit review_app)"]
-	F --> D["Autonomous Feedback Loop"]
+    A["data/incoming"] --> B["Excel parser"]
+    A --> C["PDF parser + OCR fallback"]
+    B --> D["Orchestrator"]
+    C --> D
+    D --> E["SQLite compliance_matrix"]
+    E --> F["Excel report"]
+    E --> G["Streamlit review console"]
+    G --> E
+    G --> H["autonomous_feedback_loop / training_queue"]
 ```
 
-### Sequence Diagram (Pipeline)
+## Data model
+The current schema includes:
+- `parsed_documents`
+- `master_specs`
+- `compliance_matrix`
+- `autonomous_feedback_loop`
+- `training_queue`
+- `audit_log`
+- `pipeline_runs`
+- React frontend in `frontend/` for the browser-based review dashboard.
 
-```mermaid
-sequenceDiagram
-	participant Employee
-	participant Ingest as Ingest Parsers
-	participant Eval as Evaluator
-	participant DB as SQLite
-	participant Report as ExcelReport
-	Employee->>Ingest: Drop master.xlsx + vendor PDFs
-	Ingest->>Eval: Parse text blocks + master specs
-	Eval->>DB: Write compliance rows
-	DB->>Report: Read matrix
-	Report->>Employee: Write vendor_comparison_matrix.xlsx
-	Employee->>UI: Inspect/override (Streamlit)
-	UI->>DB: Write overrides -> autonomous_feedback_loop
-```
+## Security and local-first behavior
+- SQLite uses WAL, foreign keys, and secure_delete.
+- PDF size is capped by `MAX_PDF_BYTES`.
+- API and review access use local auth tokens/JWT.
+- The default fallback path is still fully local. If you set `WEB_SEARCH_API_URL` or `XAI_API_KEY`, the system can optionally consult those services for equivalence checks and AI fallback.
 
-## How it evaluates
-- `MultiAgentEvaluator.evaluate_spec()` attempts to use `ollama.generate()` if the Ollama client is available; otherwise it falls back to `_heuristic_eval()` which checks for key terms and numeric matches in nearby sentences.
+## Optional environment variables
+- `WEB_SEARCH_API_URL` - search API endpoint for equivalence evidence.
+- `WEB_SEARCH_API_KEY` - key for the search API.
+- `WEB_SEARCH_API_HEADER` - override search auth header name.
+- `WEB_SEARCH_API_TIMEOUT` - search request timeout in seconds.
+- `XAI_API_KEY` - Grok / xAI API key.
+- `XAI_API_BASE` - Grok API base URL.
+- `XAI_API_TIMEOUT` - Grok request timeout in seconds.
 
-## Database schema
-See `src/storage/schema.sql` for the exact tables. The pipeline stores evaluation results in `compliance_matrix` and writes feedback to `autonomous_feedback_loop` when overrides occur.
-
-## Helpful commands
-- Initialize DB (created automatically by pipeline): `python -m src.main` will call `init_db()` if missing.
-- Generate report only (if DB present): run `src/reporting/excel_report.build_excel_report(output_path)` from a quick script or REPL.
-
-## Notes & Next Steps
-## UML Diagrams (graphics)
-The repository includes the original UML PNG exports in `docs/uml/` for a visual overview. View them here:
-
-- **State machine / high-level flow**
-
-	<a href="https://raw.githubusercontent.com/chandu1234678/tender-and-vendor/main/docs/uml/optimized/state-machine-bhel-1200.png"><img src="https://raw.githubusercontent.com/chandu1234678/tender-and-vendor/main/docs/uml/optimized/state-machine-bhel-600.png" alt="State Machine Diagram for BHEL" style="max-width:100%;height:auto;border:1px solid #444"/></a>
-
-- **Detailed sequence / pipeline**
-
-	<a href="https://raw.githubusercontent.com/chandu1234678/tender-and-vendor/main/docs/uml/optimized/sequence-diagram-bhel-1200.png"><img src="https://raw.githubusercontent.com/chandu1234678/tender-and-vendor/main/docs/uml/optimized/sequence-diagram-bhel-600.png" alt="Sequence diagram for BHEL" style="max-width:100%;height:auto;border:1px solid #444"/></a>
-
-## Notes & Next Steps
-- If you want, I can:
-	- expand the Mermaid diagrams to match the detailed architecture in `docs/architecture.md`;
-	- generate SVG/optimized PNG exports into `docs/uml/` for smaller files and faster rendering.
-
-## Key docs
-- `docs/architecture.md`
-- `docs/folder-structure.md`
-
----
-Generated by the repo assistant — ask me to include the PNG diagrams, run tests, or create a short contributor guide.
+## Helpful files
+- [scripts/bootstrap.ps1](scripts/bootstrap.ps1)
+- [scripts/bootstrap.sh](scripts/bootstrap.sh)
+- [src/app/run_pipeline.py](src/app/run_pipeline.py)
+- [src/ui/review_app.py](src/ui/review_app.py)
+- [src/reporting/excel_report.py](src/reporting/excel_report.py)
+- [src/storage/schema.sql](src/storage/schema.sql)

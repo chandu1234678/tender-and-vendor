@@ -1,0 +1,11 @@
+{
+  "name": "Lint & Format After Agent",
+  "version": "1.0.0",
+  "when": {
+    "type": "agentStop"
+  },
+  "then": {
+    "type": "runCommand",
+    "command": "cd ${workspaceFolder} && python -m ruff check src/ --fix && python -m ruff format src/"
+  }
+}

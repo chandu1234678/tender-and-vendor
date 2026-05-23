@@ -37,11 +37,17 @@ class MultiAgentEvaluator:
         for s in sentences:
             if not s.strip():
                 continue
-            if any(term.lower() in s.lower() for term in ["complies", "meets", "rated", "guarantee", "warrant"]):
+            if any(term.lower() in s.lower() for term in ["complies", "meets", "guarantee", "warrant"]):
                 citation = s.strip()
                 status = "YES"
                 reasoning = "Found compliance language in vendor text."
                 confidence = 0.8
+                break
+            if "rated" in s.lower():
+                citation = s.strip()
+                status = "NEARLY OK"
+                reasoning = "Found rated language; engineer should verify equivalence against the exact requirement."
+                confidence = 0.55
                 break
             # numeric match heuristic
             for n in spec_nums:
@@ -60,8 +66,9 @@ class MultiAgentEvaluator:
 
         Uses Ollama if available; otherwise falls back to heuristic rules.
         """
+        requirement = spec.get('BHEL_Requirement') or spec.get('company_Requirement') or spec.get('company_requirement') or ''
         prompt = (
-            f"You are a strict auditor. Requirement: {spec.get('BHEL_Requirement')}\n"
+            f"You are a strict auditor. Requirement: {requirement}\n"
             f"Vendor context (extract): {context}\n"
             "Return JSON: {\"compliance\": \"YES|NO|NEARLY OK\", \"citation\": \"...\", \"reasoning\": \"...\", \"confidence\": 0.0}"
         )
@@ -75,6 +82,6 @@ class MultiAgentEvaluator:
                 return EvaluationResult(status=j.get("compliance", "NO"), citation=j.get("citation", ""), reasoning=j.get("reasoning", ""), confidence=float(j.get("confidence", 0.0)))
             except Exception:
                 # fall back to heuristic
-                return self._heuristic_eval(spec.get("BHEL_Requirement", ""), context)
+                return self._heuristic_eval(requirement, context)
         else:
-            return self._heuristic_eval(spec.get("BHEL_Requirement", ""), context)
+            return self._heuristic_eval(requirement, context)

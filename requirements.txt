@@ -9,3 +9,4 @@ openpyxl
 ollama
 PyJWT
 passlib[bcrypt]
+python-multipart
