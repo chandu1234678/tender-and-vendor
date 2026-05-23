@@ -20,7 +20,7 @@ jobs:
           pip install bandit pip-audit
       - name: Run pip-audit
         run: |
-          pip-audit --progress spinner
+          pip-audit --progress-spinner off --path .
       - name: Run bandit
         run: |
           bandit -r src -lll
