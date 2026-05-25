@@ -47,12 +47,19 @@ def dispatch_spec_vendor(
     agents: List[str] | None = None,
     fast: bool = False,
 ) -> Dict[str, Any]:
-    requirement = spec.get("BHEL_Requirement") or spec.get("company_Requirement") or spec.get("company_requirement") or ""
+    requirement = (
+        spec.get("company_Requirement")
+        or spec.get("company_Requirement")
+        or spec.get("company_requirement")
+        or ""
+    )
     logging.info(f"Dispatching spec {spec.get('Spec_ID','')} for vendor {vendor_id} using model {model_name}")
     if agents is None:
         agents = ["technical", "risk", "fallback"]
     top_blocks = _top_blocks(requirement, blocks, limit=top_k)
     context = "\n\n".join(block.get("text", "") for block in top_blocks)
+    if len(context) > 4000:
+        context = context[:4000]
 
     if fast:
         # Quick heuristic: check token overlap between requirement and top block
@@ -96,7 +103,12 @@ def dispatch_spec_vendor(
                 results[name] = {}
 
     # ensure we pass three arguments to judge; missing agents are passed as empty dicts
-    judged = run_consensus_judge(results.get("technical", {}), results.get("risk", {}), results.get("fallback", {}), model_name)
+    judged = run_consensus_judge(
+        results.get("technical", {}),
+        results.get("risk", {}),
+        results.get("fallback", {}),
+        model_name,
+    )
     best_block = top_blocks[0] if top_blocks else {}
     return {
         "spec_id": spec.get("Spec_ID", ""),

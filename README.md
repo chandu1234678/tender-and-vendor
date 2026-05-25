@@ -1,6 +1,6 @@
 # Tender & Vendor Compliance Platform
 
-Local-first Python tooling for BHEL-style procurement compliance review.
+Local-first Python tooling for company-style procurement compliance review.
 It parses a master spec workbook and vendor PDFs, evaluates each spec/vendor pair,
 stores the results in SQLite, generates a color-coded Excel report, and provides a
 Streamlit review console for human overrides.

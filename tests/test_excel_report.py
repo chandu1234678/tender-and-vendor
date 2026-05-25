@@ -29,8 +29,8 @@ def test_build_excel_report_writes_three_sheets_and_colors(tmp_path):
     assert wb.sheetnames == ["Matrix", "Details", "Summary"]
 
     matrix = wb["Matrix"]
-    assert matrix["B2"].value == "YES"
-    assert matrix["C2"].value == "NO"
-    assert matrix["B2"].fill.fgColor.rgb in {"00C6EFCE", "C6EFCE"}
-    assert matrix["C2"].fill.fgColor.rgb in {"00FFC7CE", "FFC7CE"}
+    assert matrix["B3"].value == "YES"
+    assert matrix["C3"].value == "NO"
+    assert matrix["B3"].fill.fgColor.rgb in {"00C6EFCE", "C6EFCE"}
+    assert matrix["C3"].fill.fgColor.rgb in {"00FFC7CE", "FFC7CE"}
 

@@ -12,7 +12,7 @@ def _build_master_workbook(path: Path) -> None:
     wb = Workbook()
     ws = wb.active
     ws.title = "Sheet1"
-    ws.append(["Spec_ID", "Parameter_Name", "BHEL_Requirement"])
+    ws.append(["Spec_ID", "Parameter_Name", "company_Requirement"])
     ws.append(["SPEC-01", "Max Operating Temp", "Must withstand 600C continuously."])
     wb.save(path)
 
@@ -97,7 +97,7 @@ def test_pipeline_prefers_tech_checklist_workbook(tmp_path, monkeypatch):
             {
                 "Spec_ID": "SPEC-01",
                 "Parameter_Name": "Max Operating Temp",
-                "BHEL_Requirement": "Must withstand 600C continuously.",
+                "company_Requirement": "Must withstand 600C continuously.",
                 "company_Requirement": "Must withstand 600C continuously.",
             }
         ]
@@ -122,3 +122,57 @@ def test_pipeline_prefers_tech_checklist_workbook(tmp_path, monkeypatch):
     run_pipeline.main(run_id="prefer-master-test")
 
     assert selected_sources == ["Tech_Comp_check_list.xlsx"]
+
+
+def test_pipeline_resumable_and_progress_callback(tmp_path, monkeypatch):
+    project_root = tmp_path
+    incoming = project_root / "data" / "incoming"
+    parsed = project_root / "data" / "parsed"
+    output = project_root / "data" / "output"
+    incoming.mkdir(parents=True)
+    parsed.mkdir(parents=True)
+    output.mkdir(parents=True)
+
+    _build_master_workbook(incoming / "master_spec.xlsx")
+    _build_vendor_pdf(incoming / "vendorA.pdf")
+
+    call_count = {"dispatch": 0}
+
+    def fake_dispatch(spec, vendor_id, blocks, model_name="llama3"):
+        call_count["dispatch"] += 1
+        return {
+            "spec_id": spec["Spec_ID"],
+            "vendor_id": vendor_id,
+            "status": "YES",
+            "citation": blocks[0]["text"] if blocks else "",
+            "reasoning": "Mocked for test",
+            "confidence": 0.99,
+            "citation_page": blocks[0]["page"] if blocks else None,
+            "citation_bbox": blocks[0]["bbox"] if blocks else None,
+            "top_blocks": blocks[:1],
+        }
+
+    monkeypatch.setattr(run_pipeline, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(run_pipeline, "dispatch_spec_vendor", fake_dispatch)
+
+    db_path = parsed / "app.db"
+    run_pipeline.init_db(str(db_path))
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "INSERT INTO compliance_matrix (spec_id, vendor_id, status, citation, reasoning, confidence) VALUES (?, ?, ?, ?, ?, ?)",
+            ("SPEC-01", "vendorA", "YES", "cached", "cached", 0.9),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    progress_events = []
+
+    def progress_cb(progress, message):
+        progress_events.append((progress, message))
+
+    run_pipeline.main(run_id="resume-test", progress_cb=progress_cb)
+
+    assert call_count["dispatch"] == 0
+    assert any("Skipped" in msg for _, msg in progress_events)

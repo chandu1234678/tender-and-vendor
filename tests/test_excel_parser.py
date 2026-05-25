@@ -10,7 +10,7 @@ def _build_master_workbook(path: Path) -> None:
     wb = Workbook()
     ws = wb.active
     ws.title = "Sheet1"
-    ws.append(["Spec_ID", "Parameter_Name", "BHEL_Requirement"])
+    ws.append(["Spec_ID", "Parameter_Name", "company_Requirement"])
     ws.append(["SPEC-01", "Max Operating Temp", "Must withstand at least 600C continuously."])
     ws.append(["SPEC-02", "Hydrostatic Pressure", "Shell must withstand 60 bar total pressure."])
     wb.save(path)
@@ -27,7 +27,7 @@ def _build_checklist_workbook(path: Path) -> None:
     wb.save(path)
 
 
-def test_parse_master_excel_returns_bhel_requirement_alias(tmp_path):
+def test_parse_master_excel_returns_company_requirement_alias(tmp_path):
     workbook = tmp_path / "master.xlsx"
     _build_master_workbook(workbook)
 
@@ -35,8 +35,8 @@ def test_parse_master_excel_returns_bhel_requirement_alias(tmp_path):
 
     assert len(rows) == 2
     assert rows[0]["Spec_ID"] == "SPEC-01"
-    assert rows[0]["BHEL_Requirement"] == "Must withstand at least 600C continuously."
-    assert rows[0]["company_Requirement"] == rows[0]["BHEL_Requirement"]
+    assert rows[0]["company_Requirement"] == "Must withstand at least 600C continuously."
+    assert rows[0]["company_Requirement"] == rows[0]["company_Requirement"]
 
 
 def test_load_master_spec_exact_columns(tmp_path):
@@ -47,7 +47,7 @@ def test_load_master_spec_exact_columns(tmp_path):
 
     assert len(rows) == 2
     assert rows[1]["Spec_ID"] == "SPEC-02"
-    assert rows[1]["BHEL_Requirement"] == "Shell must withstand 60 bar total pressure."
+    assert rows[1]["company_Requirement"] == "Shell must withstand 60 bar total pressure."
 
 
 def test_normalize_tech_checklist_expands_vendor_blocks(tmp_path):

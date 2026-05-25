@@ -39,7 +39,7 @@ counts = {'YES':0,'NO':0,'NEARLY OK':0,'OTHER':0}
 for r in results:
     sid = r.get('spec_id')
     spec = spec_map.get(sid, {})
-    requirement = spec.get('BHEL_Requirement') or spec.get('company_Requirement') or spec.get('company_requirement') or ''
+    requirement = spec.get('company_Requirement') or spec.get('company_Requirement') or spec.get('company_requirement') or ''
     excerpt = (r.get('citation') or '').strip()
     page = r.get('citation_page')
     status = (r.get('status') or '').upper()

@@ -3,22 +3,28 @@ from typing import List
 import os
 import pandas as pd
 import sqlite3
-from openpyxl import Workbook, load_workbook
+from openpyxl import load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 
 def _style_and_adjust_columns(wb, sheet_names: List[str]):
-    green = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
-    yellow = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")
-    red = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+    green = PatternFill(fill_type="solid", fgColor="C6EFCE")
+    yellow = PatternFill(fill_type="solid", fgColor="FFEB9C")
+    red = PatternFill(fill_type="solid", fgColor="FFC7CE")
+    header_fill = PatternFill(fill_type="solid", fgColor="D9E1F2")
+    title_fill = PatternFill(fill_type="solid", fgColor="BDD7EE")
 
     if "Matrix" in sheet_names:
         ws = wb["Matrix"]
-        ws.freeze_panes = "B2"
-        for row in ws.iter_rows(min_row=2, min_col=2):
+        ws.freeze_panes = "E3"
+        header_vals = [str(cell.value or "").lower() for cell in ws[2]]
+        vendor_start_col = 2
+        if "company_requirement" in header_vals:
+            vendor_start_col = header_vals.index("company_requirement") + 2
+        for row in ws.iter_rows(min_row=3, max_row=ws.max_row, min_col=vendor_start_col, max_col=ws.max_column):
             for cell in row:
-                val = (cell.value or "").upper()
+                val = str(cell.value or "").upper()
                 cell.alignment = Alignment(wrap_text=True)
                 if val.startswith("YES"):
                     cell.fill = green
@@ -26,11 +32,22 @@ def _style_and_adjust_columns(wb, sheet_names: List[str]):
                     cell.fill = yellow
                 elif val.startswith("NO"):
                     cell.fill = red
+        # style title and header rows
+        for cell in ws[1]:
+            cell.fill = title_fill
+            cell.font = Font(bold=True)
+        for cell in ws[2]:
+            cell.fill = header_fill
+            cell.font = Font(bold=True)
 
     for sheet_name in sheet_names:
         if sheet_name not in wb.sheetnames:
             continue
         sheet = wb[sheet_name]
+        for row in sheet.iter_rows(min_row=1, max_row=1):
+            for cell in row:
+                if cell.value:
+                    cell.font = Font(bold=True)
         for col_idx, column_cells in enumerate(sheet.columns, start=1):
             max_length = 0
             for cell in column_cells:
@@ -43,16 +60,31 @@ def _style_and_adjust_columns(wb, sheet_names: List[str]):
             for cell in row:
                 cell.alignment = Alignment(wrap_text=True, vertical="top")
 
+    if "Matrix" in sheet_names:
+        ws = wb["Matrix"]
+        header_vals = [str(cell.value or "").lower() for cell in ws[2]]
+        vendor_start_col = 2
+        if "company_requirement" in header_vals:
+            vendor_start_col = header_vals.index("company_requirement") + 2
+        for row in ws.iter_rows(min_row=3, max_row=ws.max_row, min_col=vendor_start_col, max_col=ws.max_column):
+            for cell in row:
+                val = str(cell.value or "").upper()
+                if val.startswith("YES"):
+                    cell.fill = green
+                elif val.startswith("NEARLY"):
+                    cell.fill = yellow
+                elif val.startswith("NO"):
+                    cell.fill = red
+
 
 def build_excel_report(output_path: str, db_path: str = "data/parsed/app.db") -> None:
-    """Build a styled Excel report with Matrix, Details, and Summary sheets.
-
-    Additionally generate per-vendor Excel files containing columns:
-    `spec_id`, `parameter_name`, `company_requirement`, `OK` (Yes/No), `Remarks`, `Page No`.
-    """
+    """Build a styled Excel report with Matrix, Details, and Summary sheets."""
     conn = sqlite3.connect(db_path)
     df = pd.read_sql_query("SELECT * FROM compliance_matrix", conn)
-    specs = pd.read_sql_query("SELECT spec_id, parameter_name, company_requirement FROM master_specs", conn)
+    specs = pd.read_sql_query(
+        "SELECT spec_id, sheet_name, parameter_name, company_requirement, row_index FROM master_specs",
+        conn,
+    )
     conn.close()
 
     if df.empty:
@@ -72,6 +104,26 @@ def build_excel_report(output_path: str, db_path: str = "data/parsed/app.db") ->
 
     pivot = df.pivot(index="spec_id", columns="vendor_id", values="status") if not df.empty else pd.DataFrame()
     details = df.sort_values(["spec_id", "vendor_id"]) if not df.empty else df
+    if not specs.empty:
+        matrix = specs.merge(pivot, left_on="spec_id", right_index=True, how="left")
+    else:
+        matrix = pivot.reset_index()
+
+    if not pivot.empty:
+        score = (
+            pivot.fillna("")
+            .apply(lambda col: col.map(lambda v: 2 if str(v).upper().startswith("YES") else 1 if str(v).upper().startswith("NEARLY") else 0))
+            .sum()
+        )
+        score_row = {"spec_id": "SCORE"}
+        if "sheet_name" in matrix.columns:
+            score_row["sheet_name"] = ""
+        if "parameter_name" in matrix.columns:
+            score_row["parameter_name"] = "Score"
+        if "company_requirement" in matrix.columns:
+            score_row["company_requirement"] = ""
+        score_row.update(score.to_dict())
+        matrix = pd.concat([matrix, pd.DataFrame([score_row])], ignore_index=True)
     summary = (
         df.groupby("vendor_id", dropna=False)
         .agg(
@@ -86,7 +138,13 @@ def build_excel_report(output_path: str, db_path: str = "data/parsed/app.db") ->
         else pd.DataFrame(columns=["vendor_id", "total_specs", "yes_count", "nearly_ok_count", "no_count", "avg_confidence"])
     )
     summary["score"] = summary["yes_count"] * 2 + summary["nearly_ok_count"]
-    summary = summary.sort_values(["score", "avg_confidence"], ascending=[False, False])
+    summary["score_percent"] = summary.apply(
+        lambda row: round((row["score"] / (max(1, row["total_specs"]) * 2)) * 100, 2), axis=1
+    )
+    summary["recommendation"] = summary["score_percent"].apply(
+        lambda v: "RECOMMENDED" if v >= 85 else "SHORTLIST" if v >= 70 else "REVIEW"
+    )
+    summary = summary.sort_values(["score_percent", "avg_confidence"], ascending=[False, False])
 
     # Ensure output directory exists
     out_dir = os.path.dirname(output_path) or "."
@@ -94,12 +152,52 @@ def build_excel_report(output_path: str, db_path: str = "data/parsed/app.db") ->
 
     # Write combined workbook
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
-        pivot.to_excel(writer, sheet_name="Matrix")
+        matrix.to_excel(writer, sheet_name="Matrix", index=False)
+        if not details.empty and not specs.empty:
+            details = details.merge(specs, on="spec_id", how="left")
+            details = details[
+                [
+                    "spec_id",
+                    "sheet_name",
+                    "parameter_name",
+                    "company_requirement",
+                    "vendor_id",
+                    "status",
+                    "confidence",
+                    "citation",
+                    "citation_page",
+                    "citation_bbox",
+                    "reasoning",
+                ]
+            ]
         details.to_excel(writer, sheet_name="Details", index=False)
         summary.to_excel(writer, sheet_name="Summary", index=False)
 
     wb = load_workbook(output_path)
+    if "Matrix" in wb.sheetnames:
+        ws = wb["Matrix"]
+        ws.insert_rows(1)
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ws.max_column)
+        ws.cell(row=1, column=1, value="company Vendor Compliance Matrix")
     _style_and_adjust_columns(wb, ["Matrix", "Details", "Summary"])
+    if "Matrix" in wb.sheetnames:
+        ws = wb["Matrix"]
+        header_vals = [str(cell.value or "").lower() for cell in ws[2]]
+        vendor_start_col = 2
+        if "company_requirement" in header_vals:
+            vendor_start_col = header_vals.index("company_requirement") + 2
+        green = PatternFill(fill_type="solid", fgColor="C6EFCE")
+        yellow = PatternFill(fill_type="solid", fgColor="FFEB9C")
+        red = PatternFill(fill_type="solid", fgColor="FFC7CE")
+        for row in ws.iter_rows(min_row=3, max_row=ws.max_row, min_col=vendor_start_col, max_col=ws.max_column):
+            for cell in row:
+                val = str(cell.value or "").upper()
+                if val.startswith("YES"):
+                    cell.fill = green
+                elif val.startswith("NEARLY"):
+                    cell.fill = yellow
+                elif val.startswith("NO"):
+                    cell.fill = red
     wb.save(output_path)
 
     # Generate per-vendor files
@@ -110,7 +208,7 @@ def build_excel_report(output_path: str, db_path: str = "data/parsed/app.db") ->
         merged = details
 
     # Use the incoming Tech_Comp template to create per-vendor files that match layout exactly
-    template_path = os.path.join('data', 'incoming', 'Tech_Comp_check_list.xlsx')
+    template_path = os.path.join("data", "incoming", "Tech_Comp_check_list.xlsx")
     if os.path.exists(template_path) and not merged.empty:
         # Build a lookup from (spec_id, vendor_id) -> row values
         lookup = {}
@@ -118,8 +216,8 @@ def build_excel_report(output_path: str, db_path: str = "data/parsed/app.db") ->
             lookup_key = (row.get('spec_id'), row.get('vendor_id'))
             lookup[lookup_key] = {
                 'status': row.get('status'),
-                'reasoning': row.get('reasoning'),
-                'citation_excerpt': row.get('citation_excerpt'),
+                'reasoning': row.get('reasoning') or '',
+                'citation_excerpt': row.get('citation_excerpt') or row.get('citation') or '',
                 'citation_page': row.get('citation_page'),
             }
 
@@ -178,22 +276,22 @@ def build_excel_report(output_path: str, db_path: str = "data/parsed/app.db") ->
                     append_start += 1
 
                 # For each spec belonging to this sheet, write the vendor's values
-                sheet_prefix = sheet_name
-                # master spec ids use prefix like 'NB01-1'
-                cur_specs = specs[specs['spec_id'].str.startswith(f"{sheet_prefix}-", na=False)]
+                cur_specs = specs[specs['sheet_name'].fillna('') == sheet_name]
                 for _, srow in cur_specs.iterrows():
-                    try:
-                        idx = int(srow.get('spec_id').split('-')[-1])
-                    except Exception:
-                        idx = srow.get('row_index') or None
+                    idx = srow.get('row_index')
                     if not idx:
                         continue
-                    target_row = header_row + idx
+                    target_row = header_row + int(idx)
                     key = (srow.get('spec_id'), vendor_id)
                     val = lookup.get(key, {})
                     status = val.get('status')
-                    reasoning = val.get('reasoning') or val.get('citation_excerpt') or ''
                     page_no = val.get('citation_page')
+                    excerpt = val.get('citation_excerpt') or ''
+                    reasoning = val.get('reasoning') or ''
+                    if excerpt:
+                        reasoning = excerpt if not reasoning else f"{reasoning} | {excerpt}"
+                    if page_no:
+                        reasoning = f"Page {page_no}: {reasoning}" if reasoning else f"Page {page_no}"
 
                     # map status to Y/N
                     ok_val = ''
@@ -201,6 +299,10 @@ def build_excel_report(output_path: str, db_path: str = "data/parsed/app.db") ->
                         ok_val = 'Y'
                     elif status and str(status).strip().upper().startswith('NO'):
                         ok_val = 'N'
+                    elif status and str(status).strip().upper().startswith('NEARLY'):
+                        ok_val = 'N'
+                        if reasoning:
+                            reasoning = f"NEARLY OK: {reasoning}"
 
                     # Write values safely into cells that may be part of merged ranges
                     from openpyxl.cell.cell import MergedCell

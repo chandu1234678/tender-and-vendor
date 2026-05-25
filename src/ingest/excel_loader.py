@@ -122,7 +122,7 @@ def load_master_spec(path: str) -> List[Dict[str, Any]]:
     if not p.exists():
         raise FileNotFoundError(path)
     df = pd.read_excel(p, sheet_name=0, dtype=str).fillna("")
-    expected = ["Spec_ID", "Parameter_Name", "BHEL_Requirement"]
+    expected = ["Spec_ID", "Parameter_Name", "company_Requirement"]
     cols = list(df.columns)
     if not all(c in cols for c in expected):
         mapping = {}
@@ -133,7 +133,7 @@ def load_master_spec(path: str) -> List[Dict[str, Any]]:
             elif "parameter" in lc:
                 mapping["Parameter_Name"] = c
             elif "require" in lc:
-                mapping["BHEL_Requirement"] = c
+                mapping["company_Requirement"] = c
         missing = [name for name in expected if name not in mapping]
         if missing:
             raise ValueError(f"Missing required master spec columns: {missing}")

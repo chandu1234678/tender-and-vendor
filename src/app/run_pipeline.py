@@ -3,6 +3,7 @@ import logging
 import json
 import uuid
 from datetime import datetime
+from typing import Callable, Optional
 from src.ingest.excel_parser import parse_master_excel
 from src.ingest.pdf_parser import parse_pdf_blocks
 from src.storage.db import init_db, get_connection
@@ -22,7 +23,7 @@ def _pick_master_workbook(cfg_in: Path) -> Path | None:
     return candidates[0] if candidates else None
 
 
-def main(run_id: str | None = None) -> None:
+def main(run_id: str | None = None, progress_cb: Optional[Callable[[float, str], None]] = None) -> None:
     setup_logging()
     logging.info("Starting pipeline")
 
@@ -65,14 +66,18 @@ def main(run_id: str | None = None) -> None:
             "INSERT OR REPLACE INTO master_specs (source_file, sheet_name, spec_id, parameter_name, company_requirement, row_index) VALUES (?, ?, ?, ?, ?, ?)",
             (
                 master.name,
-                "",
+                spec.get("sheet_name", ""),
                 spec.get("Spec_ID", ""),
                 spec.get("Parameter_Name", ""),
-                spec.get("BHEL_Requirement", spec.get("company_Requirement", "")),
-                index,
+                spec.get("company_Requirement", spec.get("company_Requirement", spec.get("company_requirement", ""))),
+                spec.get("row_index", index),
             ),
         )
     conn.commit()
+
+    existing_pairs = set(
+        cur.execute("SELECT spec_id, vendor_id FROM compliance_matrix").fetchall()
+    )
 
     total_pairs = max(1, len(vendor_files) * len(specs))
     processed_pairs = 0
@@ -96,8 +101,20 @@ def main(run_id: str | None = None) -> None:
                 )
 
             for spec in specs:
-                # use maximum-speed heuristic mode to avoid model calls
-                result = dispatch_spec_vendor(spec, vendor_id, blocks, top_k=1, fast=True)
+                spec_id = spec.get("Spec_ID", "")
+                if (spec_id, vendor_id) in existing_pairs:
+                    processed_pairs += 1
+                    progress = round((processed_pairs / total_pairs) * 100, 2)
+                    message = f"Skipped {processed_pairs}/{total_pairs} pairs (already processed)"
+                    cur.execute(
+                        "UPDATE pipeline_runs SET progress=?, message=?, updated_at=CURRENT_TIMESTAMP WHERE run_id=?",
+                        (progress, message, run_id),
+                    )
+                    if progress_cb:
+                        progress_cb(progress, message)
+                    continue
+
+                result = dispatch_spec_vendor(spec, vendor_id, blocks)
                 citation_bbox = result.get("citation_bbox")
                 if citation_bbox is not None:
                     citation_bbox = json.dumps(citation_bbox)
@@ -118,10 +135,13 @@ def main(run_id: str | None = None) -> None:
                 )
                 processed_pairs += 1
                 progress = round((processed_pairs / total_pairs) * 100, 2)
+                message = f"Processed {processed_pairs}/{total_pairs} pairs"
                 cur.execute(
                     "UPDATE pipeline_runs SET progress=?, message=?, updated_at=CURRENT_TIMESTAMP WHERE run_id=?",
-                    (progress, f"Processed {processed_pairs}/{total_pairs} pairs", run_id),
+                    (progress, message, run_id),
                 )
+                if progress_cb:
+                    progress_cb(progress, message)
 
             conn.commit()
 

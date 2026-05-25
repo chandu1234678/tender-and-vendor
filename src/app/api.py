@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 import jwt
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status, Request
 from fastapi.responses import FileResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,9 +19,15 @@ from src.storage.db import get_connection, init_db
 from src.utils.paths import PROJECT_ROOT
 
 app = FastAPI(title="Vendor Comparison Platform")
+LOCAL_ORIGINS = [
+    "http://localhost",
+    "http://127.0.0.1",
+    "http://localhost:8501",
+    "http://127.0.0.1:8501",
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=LOCAL_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -30,6 +36,9 @@ app.add_middleware(
 SECRET_KEY = os.environ.get("SECRET_KEY", "change-this-secret")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
+MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "200"))
+MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
+ALLOWED_EXTENSIONS = {".pdf", ".xlsx"}
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/token")
@@ -88,6 +97,12 @@ def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:
     return user
 
 
+def require_localhost(request: Request) -> None:
+    host = request.client.host if request.client else ""
+    if host not in {"127.0.0.1", "::1", "localhost"}:
+        raise HTTPException(status_code=403, detail="Localhost access only")
+
+
 def _db_path() -> Path:
     return PROJECT_ROOT / "data" / "parsed" / "app.db"
 
@@ -129,7 +144,7 @@ def _run_pipeline_job(run_id: str) -> None:
 
 
 @app.post("/token")
-def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
+def login_for_access_token(request: Request, form_data: OAuth2PasswordRequestForm = Depends(), _: None = Depends(require_localhost)):
     user = authenticate_user(form_data.username, form_data.password)
     if not user:
         raise HTTPException(status_code=400, detail="Incorrect username or password")
@@ -138,25 +153,36 @@ def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
 
 
 @app.get("/health")
-def health() -> dict:
+def health(_: None = Depends(require_localhost)) -> dict:
     return {"status": "ok"}
 
 
 @app.post("/upload")
-def upload_files(current_user: dict = Depends(get_current_user), files: list[UploadFile] = File(...)) -> dict:
+def upload_files(current_user: dict = Depends(get_current_user), files: list[UploadFile] = File(...), _: None = Depends(require_localhost)) -> dict:
     incoming = PROJECT_ROOT / "data" / "incoming"
     incoming.mkdir(parents=True, exist_ok=True)
     saved = []
     for upload in files:
-        destination = incoming / Path(upload.filename).name
+        dest_name = Path(upload.filename).name
+        if Path(dest_name).suffix.lower() not in ALLOWED_EXTENSIONS:
+            raise HTTPException(status_code=400, detail=f"Unsupported file type: {dest_name}")
+        destination = incoming / dest_name
+        size = 0
         with destination.open("wb") as target:
-            shutil.copyfileobj(upload.file, target)
+            while True:
+                chunk = upload.file.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > MAX_UPLOAD_BYTES:
+                    raise HTTPException(status_code=413, detail=f"File too large (max {MAX_UPLOAD_MB} MB)")
+                target.write(chunk)
         saved.append(destination.name)
     return {"saved": saved}
 
 
 @app.post("/run-pipeline")
-def run_pipeline_endpoint(current_user: dict = Depends(get_current_user)) -> dict:
+def run_pipeline_endpoint(current_user: dict = Depends(get_current_user), _: None = Depends(require_localhost)) -> dict:
     _ensure_app_db()
     run_id = str(uuid.uuid4())
     conn = get_connection(str(_db_path()))
@@ -175,7 +201,7 @@ def run_pipeline_endpoint(current_user: dict = Depends(get_current_user)) -> dic
 
 
 @app.get("/status/{run_id}")
-def status_endpoint(run_id: str, current_user: dict = Depends(get_current_user)) -> dict:
+def status_endpoint(run_id: str, current_user: dict = Depends(get_current_user), _: None = Depends(require_localhost)) -> dict:
     _ensure_app_db()
     conn = get_connection(str(_db_path()))
     try:
@@ -199,7 +225,7 @@ def status_endpoint(run_id: str, current_user: dict = Depends(get_current_user))
 
 
 @app.get("/results")
-def results_endpoint(current_user: dict = Depends(get_current_user)) -> dict:
+def results_endpoint(current_user: dict = Depends(get_current_user), _: None = Depends(require_localhost)) -> dict:
     _ensure_app_db()
     conn = get_connection(str(_db_path()))
     try:
@@ -211,7 +237,7 @@ def results_endpoint(current_user: dict = Depends(get_current_user)) -> dict:
 
 
 @app.get("/parsed-document/{doc_id}")
-def parsed_document_endpoint(doc_id: str, current_user: dict = Depends(get_current_user)) -> dict:
+def parsed_document_endpoint(doc_id: str, current_user: dict = Depends(get_current_user), _: None = Depends(require_localhost)) -> dict:
     _ensure_app_db()
     conn = get_connection(str(_db_path()))
     try:
@@ -233,7 +259,7 @@ def parsed_document_endpoint(doc_id: str, current_user: dict = Depends(get_curre
 
 
 @app.get("/pdf/{file_name}")
-def pdf_endpoint(file_name: str, current_user: dict = Depends(get_current_user)):
+def pdf_endpoint(file_name: str, current_user: dict = Depends(get_current_user), _: None = Depends(require_localhost)):
     pdf_path = _incoming_dir() / Path(file_name).name
     if not pdf_path.exists():
         raise HTTPException(status_code=404, detail="PDF not found")
@@ -241,7 +267,7 @@ def pdf_endpoint(file_name: str, current_user: dict = Depends(get_current_user))
 
 
 @app.post("/override")
-def override_endpoint(payload: dict, current_user: dict = Depends(get_current_user)) -> dict:
+def override_endpoint(payload: dict, current_user: dict = Depends(get_current_user), _: None = Depends(require_localhost)) -> dict:
     spec_id = str(payload.get("spec_id", "")).strip()
     vendor_id = str(payload.get("vendor_id", "")).strip()
     new_status = str(payload.get("new_status", "")).strip()
@@ -286,7 +312,7 @@ def override_endpoint(payload: dict, current_user: dict = Depends(get_current_us
 
 
 @app.get("/report")
-def report_endpoint(current_user: dict = Depends(get_current_user)):
+def report_endpoint(current_user: dict = Depends(get_current_user), _: None = Depends(require_localhost)):
     report_path = _report_path()
     if not report_path.exists():
         raise HTTPException(status_code=404, detail="Report not found")
@@ -294,5 +320,5 @@ def report_endpoint(current_user: dict = Depends(get_current_user)):
 
 
 @app.get("/secure")
-def secure_endpoint(current_user: dict = Depends(get_current_user)) -> dict:
+def secure_endpoint(current_user: dict = Depends(get_current_user), _: None = Depends(require_localhost)) -> dict:
     return {"status": "ok", "user": current_user["username"]}

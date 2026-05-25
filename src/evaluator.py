@@ -32,21 +32,24 @@ class MultiAgentEvaluator:
         sentences = re.split(r"(?<=[.!?])\s+", context)
         citation = ""
         status = "NO"
-        reasoning = "No matching clause found."
+        reasoning = "No matching clause found for the requirement."
         confidence = 0.0
+        spec_hint = (spec_text or "").strip()
+        if len(spec_hint) > 160:
+            spec_hint = f"{spec_hint[:157]}..."
         for s in sentences:
             if not s.strip():
                 continue
             if any(term.lower() in s.lower() for term in ["complies", "meets", "guarantee", "warrant"]):
                 citation = s.strip()
                 status = "YES"
-                reasoning = "Found compliance language in vendor text."
+                reasoning = f"Compliance language found for requirement: {spec_hint}"
                 confidence = 0.8
                 break
             if "rated" in s.lower():
                 citation = s.strip()
                 status = "NEARLY OK"
-                reasoning = "Found rated language; engineer should verify equivalence against the exact requirement."
+                reasoning = f"Rated language found; verify equivalence for requirement: {spec_hint}"
                 confidence = 0.55
                 break
             # numeric match heuristic
@@ -54,11 +57,13 @@ class MultiAgentEvaluator:
                 if n in s:
                     citation = s.strip()
                     status = "NEARLY OK"
-                    reasoning = f"Found numeric value {n} in context; needs engineer verification."
+                    reasoning = f"Numeric match {n} found; verify requirement: {spec_hint}"
                     confidence = 0.5
                     break
             if status != "NO":
                 break
+        if citation and len(citation) > 200:
+            citation = f"{citation[:197]}..."
         return EvaluationResult(status=status, citation=citation or "", reasoning=reasoning, confidence=confidence)
 
     def evaluate_spec(self, vendor_id: str, spec: Dict[str, str], context: str) -> EvaluationResult:
@@ -66,7 +71,7 @@ class MultiAgentEvaluator:
 
         Uses Ollama if available; otherwise falls back to heuristic rules.
         """
-        requirement = spec.get('BHEL_Requirement') or spec.get('company_Requirement') or spec.get('company_requirement') or ''
+        requirement = spec.get('company_Requirement') or spec.get('company_Requirement') or spec.get('company_requirement') or ''
         prompt = (
             f"You are a strict auditor. Requirement: {requirement}\n"
             f"Vendor context (extract): {context}\n"
