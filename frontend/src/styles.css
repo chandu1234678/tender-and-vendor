@@ -98,21 +98,11 @@ h2 {
   overflow-wrap: anywhere;
 }
 
-.auth-panel {
-  width: min(420px, 100%);
-  margin-top: 18px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  padding: 18px;
-  display: grid;
-  gap: 10px;
-}
-
 .status-strip {
   margin-top: 14px;
   padding: 12px;
   display: grid;
-  grid-template-columns: repeat(3, minmax(120px, 1fr)) auto auto;
+  grid-template-columns: repeat(2, minmax(120px, 1fr)) auto;
   gap: 10px;
   align-items: center;
 }

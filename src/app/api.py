@@ -1,19 +1,15 @@
 import json
 import os
-import secrets
 import shutil
 import threading
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-import jwt
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status, Request
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, Request
 from fastapi.responses import FileResponse
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
-from passlib.context import CryptContext
 from pydantic import BaseModel, Field
 
 from src.app.run_pipeline import main as run_pipeline_main
@@ -32,31 +28,15 @@ LOCAL_ORIGINS = [
 app.add_middleware(
     CORSMiddleware,
     allow_origins=LOCAL_ORIGINS,
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-SECRET_KEY = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "200"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 ALLOWED_EXTENSIONS = {".pdf", ".xlsx"}
-
-pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/token")
-
-
-class TokenResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-
-
-class UserResponse(BaseModel):
-    username: str
-    full_name: str = ""
-    disabled: bool = False
 
 
 class HealthResponse(BaseModel):
@@ -128,87 +108,6 @@ class OverrideResponse(BaseModel):
     spec_id: str
     vendor_id: str
     new_status: str
-
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
-
-
-def get_password_hash(password: str) -> str:
-    return pwd_context.hash(password)
-
-
-fake_users_db = {}
-
-
-def _seed_default_user(conn) -> None:
-    username = os.environ.get("API_ADMIN_USERNAME", "admin")
-    password = os.environ.get("API_ADMIN_PASSWORD", "changeme")
-    full_name = os.environ.get("API_ADMIN_FULL_NAME", "Administrator")
-    row = conn.execute("SELECT username FROM application_users WHERE username=?", (username,)).fetchone()
-    if row:
-        return
-    conn.execute(
-        "INSERT INTO application_users (username, full_name, hashed_password, disabled) VALUES (?, ?, ?, ?)",
-        (username, full_name, get_password_hash(password), 0),
-    )
-
-
-def _get_user_from_db(username: str) -> Optional[dict]:
-    _ensure_app_db()
-    conn = get_connection(str(_db_path()))
-    try:
-        _seed_default_user(conn)
-        conn.commit()
-        row = conn.execute(
-            "SELECT username, full_name, hashed_password, disabled FROM application_users WHERE username=?",
-            (username,),
-        ).fetchone()
-    finally:
-        conn.close()
-    if not row:
-        return fake_users_db.get(username)
-    return {
-        "username": row[0],
-        "full_name": row[1],
-        "hashed_password": row[2],
-        "disabled": bool(row[3]),
-    }
-
-
-def authenticate_user(username: str, password: str) -> Optional[dict]:
-    user = _get_user_from_db(username)
-    if not user:
-        return None
-    if not verify_password(password, user["hashed_password"]):
-        return None
-    return user
-
-
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
-    to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-
-
-def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username: str = payload.get("sub") or payload.get("username")
-        if username is None:
-            raise credentials_exception
-    except Exception:
-        raise credentials_exception
-    user = _get_user_from_db(username)
-    if user is None:
-        raise credentials_exception
-    return user
 
 
 def require_localhost(request: Request) -> None:
@@ -294,31 +193,13 @@ def _run_pipeline_job(run_id: str) -> None:
         _set_run_state(run_id, "failed", "Pipeline failed", 0.0, str(exc))
 
 
-@app.post("/token", response_model=TokenResponse)
-def login_for_access_token(request: Request, form_data: OAuth2PasswordRequestForm = Depends(), _: None = Depends(require_localhost)):
-    user = authenticate_user(form_data.username, form_data.password)
-    if not user:
-        raise HTTPException(status_code=400, detail="Incorrect username or password")
-    access_token = create_access_token(data={"sub": user["username"]})
-    return {"access_token": access_token, "token_type": "bearer"}
-
-
 @app.get("/health", response_model=HealthResponse)
 def health(_: None = Depends(require_localhost)) -> dict:
     return {"status": "ok"}
 
 
-@app.get("/me", response_model=UserResponse)
-def me_endpoint(current_user: dict = Depends(get_current_user), _: None = Depends(require_localhost)) -> dict:
-    return {
-        "username": current_user["username"],
-        "full_name": current_user.get("full_name", ""),
-        "disabled": bool(current_user.get("disabled", False)),
-    }
-
-
 @app.get("/files", response_model=FilesResponse)
-def files_endpoint(current_user: dict = Depends(get_current_user), _: None = Depends(require_localhost)) -> dict:
+def files_endpoint(_: None = Depends(require_localhost)) -> dict:
     incoming = _incoming_dir()
     incoming.mkdir(parents=True, exist_ok=True)
     files = [
@@ -330,7 +211,7 @@ def files_endpoint(current_user: dict = Depends(get_current_user), _: None = Dep
 
 
 @app.post("/upload", response_model=UploadResponse)
-def upload_files(current_user: dict = Depends(get_current_user), files: list[UploadFile] = File(...), _: None = Depends(require_localhost)) -> dict:
+def upload_files(files: list[UploadFile] = File(...), _: None = Depends(require_localhost)) -> dict:
     incoming = PROJECT_ROOT / "data" / "incoming"
     incoming.mkdir(parents=True, exist_ok=True)
     names = [Path(upload.filename).name for upload in files]
@@ -359,7 +240,7 @@ def upload_files(current_user: dict = Depends(get_current_user), files: list[Upl
 
 
 @app.post("/run-pipeline", response_model=PipelineRunResponse)
-def run_pipeline_endpoint(current_user: dict = Depends(get_current_user), _: None = Depends(require_localhost)) -> dict:
+def run_pipeline_endpoint(_: None = Depends(require_localhost)) -> dict:
     _ensure_app_db()
     run_id = str(uuid.uuid4())
     conn = get_connection(str(_db_path()))
@@ -386,7 +267,6 @@ def run_pipeline_endpoint(current_user: dict = Depends(get_current_user), _: Non
 def runs_endpoint(
     limit: int = 25,
     offset: int = 0,
-    current_user: dict = Depends(get_current_user),
     _: None = Depends(require_localhost),
 ) -> list[dict[str, Any]]:
     limit = max(1, min(limit, 100))
@@ -409,12 +289,12 @@ def runs_endpoint(
 
 
 @app.get("/runs/{run_id}", response_model=PipelineStatusResponse)
-def run_detail_endpoint(run_id: str, current_user: dict = Depends(get_current_user), _: None = Depends(require_localhost)) -> dict:
-    return status_endpoint(run_id, current_user, _)
+def run_detail_endpoint(run_id: str, _: None = Depends(require_localhost)) -> dict:
+    return status_endpoint(run_id, _)
 
 
 @app.get("/status/{run_id}", response_model=PipelineStatusResponse)
-def status_endpoint(run_id: str, current_user: dict = Depends(get_current_user), _: None = Depends(require_localhost)) -> dict:
+def status_endpoint(run_id: str, _: None = Depends(require_localhost)) -> dict:
     _ensure_app_db()
     conn = get_connection(str(_db_path()))
     try:
@@ -436,7 +316,6 @@ def results_endpoint(
     status_filter: Optional[str] = None,
     limit: int = 500,
     offset: int = 0,
-    current_user: dict = Depends(get_current_user),
     _: None = Depends(require_localhost),
 ) -> dict:
     limit = max(1, min(limit, 5000))
@@ -468,7 +347,7 @@ def results_endpoint(
 
 
 @app.get("/summary", response_model=SummaryResponse)
-def summary_endpoint(current_user: dict = Depends(get_current_user), _: None = Depends(require_localhost)) -> dict:
+def summary_endpoint(_: None = Depends(require_localhost)) -> dict:
     _ensure_app_db()
     conn = get_connection(str(_db_path()))
     try:
@@ -487,7 +366,7 @@ def summary_endpoint(current_user: dict = Depends(get_current_user), _: None = D
 
 
 @app.get("/parsed-document/{doc_id}", response_model=ParsedDocumentResponse)
-def parsed_document_endpoint(doc_id: str, current_user: dict = Depends(get_current_user), _: None = Depends(require_localhost)) -> dict:
+def parsed_document_endpoint(doc_id: str, _: None = Depends(require_localhost)) -> dict:
     _ensure_app_db()
     conn = get_connection(str(_db_path()))
     try:
@@ -509,7 +388,7 @@ def parsed_document_endpoint(doc_id: str, current_user: dict = Depends(get_curre
 
 
 @app.get("/pdf/{file_name}")
-def pdf_endpoint(file_name: str, current_user: dict = Depends(get_current_user), _: None = Depends(require_localhost)):
+def pdf_endpoint(file_name: str, _: None = Depends(require_localhost)):
     pdf_path = _incoming_dir() / Path(file_name).name
     if not pdf_path.exists():
         raise HTTPException(status_code=404, detail="PDF not found")
@@ -520,7 +399,6 @@ def pdf_endpoint(file_name: str, current_user: dict = Depends(get_current_user),
 def audit_log_endpoint(
     limit: int = 100,
     offset: int = 0,
-    current_user: dict = Depends(get_current_user),
     _: None = Depends(require_localhost),
 ) -> dict:
     limit = max(1, min(limit, 500))
@@ -549,7 +427,6 @@ def training_queue_endpoint(
     processed: Optional[int] = None,
     limit: int = 100,
     offset: int = 0,
-    current_user: dict = Depends(get_current_user),
     _: None = Depends(require_localhost),
 ) -> dict:
     limit = max(1, min(limit, 500))
@@ -581,7 +458,7 @@ def training_queue_endpoint(
 
 
 @app.post("/override", response_model=OverrideResponse)
-def override_endpoint(payload: OverrideRequest, current_user: dict = Depends(get_current_user), _: None = Depends(require_localhost)) -> dict:
+def override_endpoint(payload: OverrideRequest, _: None = Depends(require_localhost)) -> dict:
     spec_id = payload.spec_id.strip()
     vendor_id = payload.vendor_id.strip()
     new_status = payload.new_status.strip()
@@ -626,13 +503,10 @@ def override_endpoint(payload: OverrideRequest, current_user: dict = Depends(get
 
 
 @app.get("/report")
-def report_endpoint(current_user: dict = Depends(get_current_user), _: None = Depends(require_localhost)):
+def report_endpoint(_: None = Depends(require_localhost)):
     report_path = _report_path()
     if not report_path.exists():
         raise HTTPException(status_code=404, detail="Report not found")
     return FileResponse(str(report_path), filename=report_path.name)
 
 
-@app.get("/secure")
-def secure_endpoint(current_user: dict = Depends(get_current_user), _: None = Depends(require_localhost)) -> dict:
-    return {"status": "ok", "user": current_user["username"]}

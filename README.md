@@ -88,7 +88,7 @@ npm install
 npm run dev
 ```
 
-The app expects the FastAPI backend at `http://127.0.0.1:8000` by default.
+The app expects the FastAPI backend at `http://127.0.0.1:8088` by default.
 If your API runs elsewhere, set `VITE_API_BASE_URL` before starting Vite.
 
 ## Tests

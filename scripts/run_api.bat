@@ -8,5 +8,6 @@ IF EXIST .venv\Scripts\activate.bat (
   echo "venv activate script not found; using .venv python"
 )
 .
-%~dp0.venv\Scripts\python.exe -m uvicorn src.app.api:app --host 127.0.0.1 --port 8000
+%~dp0.venv\Scripts\python.exe -m uvicorn src.app.api:app --host 127.0.0.1 --port 8088
 ENDLOCAL
+  
