@@ -67,14 +67,62 @@ def _normalize_text(text: str) -> str:
     return " ".join((text or "").split())
 
 
+def _make_dispatch_result(
+    spec_id: str,
+    vendor_id: str,
+    status: str,
+    citation: str,
+    reasoning: str,
+    confidence: float,
+    citation_page: Optional[int] = None,
+    citation_bbox: Optional[List[float]] = None,
+    technical: Optional[Dict[str, Any]] = None,
+    risk: Optional[Dict[str, Any]] = None,
+    fallback: Optional[Dict[str, Any]] = None,
+    top_blocks: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Return a canonical dispatch result with consistent keys.
+
+    Ensures `technical`, `risk`, and `fallback` are dicts with at least
+    `status` and `confidence` keys (or empty dicts) so downstream DB inserts
+    and consumers don't see shape variance.
+    """
+    technical = technical or {}
+    risk = risk or {}
+    fallback = fallback or {}
+    def _norm_agent(a: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(a, dict):
+            return {}
+        return {
+            "status": a.get("status"),
+            "confidence": float(a.get("confidence", 0.0)) if a.get("confidence") is not None else None,
+            **{k: v for k, v in a.items() if k not in {"status", "confidence"}},
+        }
+
+    return {
+        "spec_id": spec_id,
+        "vendor_id": vendor_id,
+        "status": status,
+        "citation": citation,
+        "reasoning": reasoning,
+        "confidence": float(confidence or 0.0),
+        "citation_page": citation_page,
+        "citation_bbox": citation_bbox,
+        "technical": _norm_agent(technical),
+        "risk": _norm_agent(risk),
+        "fallback": _norm_agent(fallback),
+        "top_blocks": top_blocks or [],
+    }
+
+
 @dataclass(frozen=True)
 class VendorIndex:
-    blocks: List[Dict[str, Any]]
-    block_tokens: List[List[str]]
-    block_token_counts: List[Counter]
+    blocks: Tuple[Dict[str, Any], ...]
+    block_tokens: Tuple[Tuple[str, ...], ...]
+    block_token_counts: Tuple[Counter, ...]
     idf: Dict[str, float]
     avg_block_len: float
-    block_texts_norm: List[str]
+    block_texts_norm: Tuple[str, ...]
 
     @classmethod
     def build(cls, blocks: Sequence[Dict[str, Any]]) -> "VendorIndex":
@@ -102,12 +150,12 @@ class VendorIndex:
             for token, freq in doc_freq.items()
         }
         return cls(
-            blocks=block_list,
-            block_tokens=block_tokens,
-            block_token_counts=block_token_counts,
+            blocks=tuple(block_list),
+            block_tokens=tuple(tuple(bt) for bt in block_tokens),
+            block_token_counts=tuple(block_token_counts),
             idf=idf,
             avg_block_len=avg_block_len,
-            block_texts_norm=block_texts_norm,
+            block_texts_norm=tuple(block_texts_norm),
         )
 
 
@@ -192,8 +240,8 @@ def _numeric_magnitude_ok(requirement: str, evidence_text: str) -> bool:
                 pass
 
         if not ev_vals:
-            # Unit not found in evidence at all — can't confirm
-            continue
+            # Unit not found in evidence at all — requirement cannot be confirmed
+            return False
 
         best_ev = max(ev_vals)
         if is_minimum:
@@ -234,11 +282,11 @@ def _top_blocks_from_index(spec_text: str, index: VendorIndex, limit: int = 5) -
     return [dict(index.blocks[idx]) for idx in top_indices], [index.block_texts_norm[idx] for idx in top_indices]
 
 
-def _trim_context(context: str, max_chars: int = 900) -> str:
+def _trim_context(context: str, max_chars: int = 3500) -> str:
     """Trim context to max_chars, cutting at a sentence boundary.
 
-    Default is 1500 chars — enough for a 1.5B model to reason well
-    without blowing the context window or slowing generation.
+    Default is 3500 chars — large enough to preserve meaningful vendor
+    paragraphs while keeping prompts reasonably sized.
     """
     if len(context) <= max_chars:
         return context
@@ -414,20 +462,20 @@ def dispatch_spec_vendor(
     if quick:
         _record_dispatch("quick")
         best_block = top_blocks[0] if top_blocks else {}
-        return {
-            "spec_id": spec_id,
-            "vendor_id": vendor_id,
-            "status": quick["status"],
-            "citation": quick["citation"],
-            "reasoning": quick["reasoning"],
-            "confidence": quick["confidence"],
-            "citation_page": best_block.get("page"),
-            "citation_bbox": best_block.get("bbox"),
-            "technical": {"status": quick["status"], "confidence": quick["confidence"]},
-            "risk": {},
-            "fallback": {},
-            "top_blocks": top_blocks,
-        }
+        return _make_dispatch_result(
+            spec_id,
+            vendor_id,
+            quick["status"],
+            quick["citation"],
+            quick["reasoning"],
+            quick["confidence"],
+            citation_page=best_block.get("page"),
+            citation_bbox=best_block.get("bbox"),
+            technical={"status": quick["status"], "confidence": quick["confidence"]},
+            risk={},
+            fallback={},
+            top_blocks=top_blocks,
+        )
 
     if fast:
         _record_dispatch("fast")
@@ -448,23 +496,23 @@ def dispatch_spec_vendor(
         else:
             status = "NO"
 
-        return {
-            "spec_id": spec_id,
-            "vendor_id": vendor_id,
-            "status": status,
-            "citation": best_text,
-            "reasoning": (
+        return _make_dispatch_result(
+            spec_id,
+            vendor_id,
+            status,
+            best_text,
+            (
                 f"heuristic token overlap {len(overlap)} tokens"
                 + ("" if magnitude_ok else "; numeric values do not meet requirement")
             ),
-            "confidence": float(min(0.99, max(0.0, score))) if magnitude_ok else 0.85,
-            "citation_page": best.get("page"),
-            "citation_bbox": best.get("bbox"),
-            "technical": {},
-            "risk": {},
-            "fallback": {},
-            "top_blocks": top_blocks,
-        }
+            float(min(0.99, max(0.0, score))) if magnitude_ok else 0.85,
+            citation_page=best.get("page"),
+            citation_bbox=best.get("bbox"),
+            technical={},
+            risk={},
+            fallback={},
+            top_blocks=top_blocks,
+        )
 
     if allow_model_shortcuts and _bool_env("LLM_ONLY_UNCERTAIN", False):
         heuristic = _heuristic_overlap_eval(requirement, top_blocks)
@@ -472,20 +520,20 @@ def dispatch_spec_vendor(
             _record_dispatch("heuristic")
             best_block = top_blocks[0] if top_blocks else {}
             citation = _verify_citation(heuristic.get("citation", ""), top_blocks_norm, best_block.get("text", ""))
-            return {
-                "spec_id": spec_id,
-                "vendor_id": vendor_id,
-                "status": heuristic["status"],
-                "citation": citation,
-                "reasoning": heuristic.get("reasoning", ""),
-                "confidence": heuristic.get("confidence", 0.5),
-                "citation_page": best_block.get("page"),
-                "citation_bbox": best_block.get("bbox"),
-                "technical": {"status": heuristic["status"], "confidence": heuristic.get("confidence", 0.5)},
-                "risk": {},
-                "fallback": {},
-                "top_blocks": top_blocks,
-            }
+            return _make_dispatch_result(
+                spec_id,
+                vendor_id,
+                heuristic["status"],
+                citation,
+                heuristic.get("reasoning", ""),
+                heuristic.get("confidence", 0.5),
+                citation_page=best_block.get("page"),
+                citation_bbox=best_block.get("bbox"),
+                technical={"status": heuristic["status"], "confidence": heuristic.get("confidence", 0.5)},
+                risk={},
+                fallback={},
+                top_blocks=top_blocks,
+            )
 
     # ── single-call LLM path (1 call instead of 4) ──────────────────────────
     if allow_model_shortcuts and is_healthy():
@@ -495,20 +543,20 @@ def dispatch_spec_vendor(
             _record_dispatch("llm_single")
             best_block = top_blocks[0] if top_blocks else {}
             citation = _verify_citation(judged.get("citation", ""), top_blocks_norm, best_block.get("text", ""))
-            return {
-                "spec_id": spec_id,
-                "vendor_id": vendor_id,
-                "status": judged["status"],
-                "citation": citation,
-                "reasoning": judged.get("reasoning", ""),
-                "confidence": judged.get("confidence", 0.5),
-                "citation_page": best_block.get("page"),
-                "citation_bbox": best_block.get("bbox"),
-                "technical": {"status": judged["status"], "confidence": judged.get("confidence", 0.5)},
-                "risk": {},
-                "fallback": {},
-                "top_blocks": top_blocks,
-            }
+            return _make_dispatch_result(
+                spec_id,
+                vendor_id,
+                judged["status"],
+                citation,
+                judged.get("reasoning", ""),
+                judged.get("confidence", 0.5),
+                citation_page=best_block.get("page"),
+                citation_bbox=best_block.get("bbox"),
+                technical={"status": judged["status"], "confidence": judged.get("confidence", 0.5)},
+                risk={},
+                fallback={},
+                top_blocks=top_blocks,
+            )
 
     # ── multi-agent path (fallback when single-call fails or LLM is down) ───
     _record_dispatch("llm_multi")

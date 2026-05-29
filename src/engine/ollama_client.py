@@ -115,67 +115,72 @@ def _extract_lmstudio_text(payload: Any) -> str:
     if not isinstance(payload, dict):
         return str(payload or "").strip()
 
+    # 1) LM Studio "output" list format: prefer all items with type=="message"
     output = payload.get("output")
     if isinstance(output, list):
-        message_parts: list[str] = []
+        msgs: list[str] = []
         for item in output:
             if not isinstance(item, dict):
                 continue
             content = item.get("content")
-            if not isinstance(content, str) or not content.strip():
-                continue
-            if item.get("type") == "message":
-                message_parts.append(content.strip())
-            elif item.get("type") != "reasoning" and not message_parts:
-                message_parts.append(content.strip())
-        if message_parts:
-            return message_parts[-1]
+            if isinstance(content, str) and content.strip():
+                if item.get("type") == "message":
+                    msgs.append(content.strip())
+        if msgs:
+            return msgs[-1]
 
-    for key in ("output", "content", "response", "text", "result"):
+    # 2) OpenAI-compatible "choices" format
+    choices = payload.get("choices")
+    if isinstance(choices, list) and choices:
+        # collect all non-empty message.content or text fields
+        collected: list[str] = []
+        for ch in choices:
+            if not isinstance(ch, dict):
+                continue
+            # message may be under choice['message']
+            msg = ch.get("message") or ch.get("delta") or {}
+            if isinstance(msg, dict):
+                content = msg.get("content")
+                if isinstance(content, str) and content.strip():
+                    collected.append(content.strip())
+                    continue
+            text = ch.get("text")
+            if isinstance(text, str) and text.strip():
+                collected.append(text.strip())
+        if collected:
+            return collected[-1]
+
+    # 3) Fallback simple keys
+    for key in ("content", "response", "text", "result"):
         value = payload.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
+
+    # 4) nested message
     message = payload.get("message")
     if isinstance(message, dict):
         content = message.get("content")
         if isinstance(content, str) and content.strip():
             return content.strip()
-    choices = payload.get("choices")
-    if isinstance(choices, list) and choices:
-        first = choices[0]
-        if isinstance(first, dict):
-            msg = first.get("message") or first.get("delta") or {}
-            if isinstance(msg, dict):
-                content = msg.get("content")
-                if isinstance(content, str) and content.strip():
-                    return content.strip()
-            text = first.get("text")
-            if isinstance(text, str) and text.strip():
-                return text.strip()
+
     return ""
 
 
 def _generate_lmstudio(model: str, prompt: str, temperature: float, max_tokens: int) -> Optional[str]:
-    del max_tokens  # not supported on /api/v1/chat (causes HTTP 400)
+    # Use the OpenAI-compatible completions endpoint which supports
+    # `max_tokens` and predictable response shapes (choices[0].message.content).
     payload: dict[str, Any] = {
         "model": model,
-        "system_prompt": JSON_SYSTEM,
-        "input": prompt,
+        "messages": [
+            {"role": "system", "content": JSON_SYSTEM},
+            {"role": "user", "content": prompt},
+        ],
         "temperature": temperature,
+        "max_tokens": int(max_tokens) if max_tokens is not None else None,
     }
 
     try:
-        response = _http_json("POST", f"{OLLAMA_HOST}/api/v1/chat", payload)
-        stats = response.get("stats") if isinstance(response, dict) else None
-        if isinstance(stats, dict):
-            reasoning_tok = int(stats.get("reasoning_output_tokens") or 0)
-            if reasoning_tok > 0:
-                logger.debug(
-                    "LM Studio reasoning tokens=%s (model=%s, ttft=%ss)",
-                    reasoning_tok,
-                    model,
-                    stats.get("time_to_first_token_seconds"),
-                )
+        response = _http_json("POST", f"{OLLAMA_HOST}/v1/chat/completions", payload)
         text = _extract_lmstudio_text(response)
         return text or None
     except Exception as exc:

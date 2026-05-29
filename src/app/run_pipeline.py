@@ -21,22 +21,25 @@ from src.evaluator import retrain_from_feedback
 
 def _load_blocks_from_db(cur, file_name: str) -> list[dict]:
     rows = cur.execute(
-        "SELECT page, bbox, text FROM parsed_documents WHERE file_name=? ORDER BY page, doc_id",
+        "SELECT doc_id, page, bbox, text FROM parsed_documents WHERE file_name=? ORDER BY page, doc_id",
         (file_name,),
     ).fetchall()
     blocks = []
-    for page, bbox, text in rows:
+    for doc_id, page, bbox, text in rows:
         try:
             parsed_bbox = json.loads(bbox)
         except Exception:
             parsed_bbox = bbox
-        blocks.append({"page": page, "bbox": parsed_bbox, "text": text})
+        blocks.append({"doc_id": doc_id, "page": page, "bbox": parsed_bbox, "text": text})
     return blocks
 
 
 def _citation_doc_id(vendor_id: str, top_blocks: list[dict]) -> str | None:
     if not top_blocks:
         return None
+    doc_id = top_blocks[0].get("doc_id")
+    if isinstance(doc_id, str) and doc_id:
+        return doc_id
     page = top_blocks[0].get("page")
     return f"{vendor_id}:{page}:0" if page is not None else None
 
@@ -271,6 +274,7 @@ def main(run_id: str | None = None, progress_cb: Optional[Callable[[float, str],
                 )
                 for i, b in enumerate(blocks):
                     doc_id = f"{vendor_id}:{b['page']}:{i}"
+                    b["doc_id"] = doc_id
                     cur.execute(
                         "INSERT OR REPLACE INTO parsed_documents (doc_id, file_name, page, bbox, text) VALUES (?, ?, ?, ?, ?)",
                         (doc_id, v.name, b["page"], str(b["bbox"]), b["text"]),

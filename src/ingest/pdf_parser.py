@@ -16,7 +16,7 @@ try:
 except Exception:
     MAX_PDF_BYTES = 200 * 1024 * 1024
 
-MIN_BLOCK_CHARS = 20
+MIN_BLOCK_CHARS = 5
 
 
 def _tessdata_dir(cmd_path: Path) -> Optional[Path]:

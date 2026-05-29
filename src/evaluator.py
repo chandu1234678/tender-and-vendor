@@ -10,11 +10,19 @@ import json
 import logging
 import re
 import sqlite3
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+# Reusable connection for hit counting to avoid connect churn
+_hit_conn = None
+_hit_conn_path = None
+# In-memory aggregation of hit counts to batch DB updates
+_hit_counts: Dict[str, int] = {}
+_hit_lock = threading.Lock()
 
 
 @dataclass
@@ -73,18 +81,67 @@ def _load_rules(db_path: Optional[str] = None) -> List[Tuple[str, str, float]]:
 
 
 def _increment_hit(pattern: str, db_path: Optional[str] = None) -> None:
+    # Batch hits in-memory and flush later to avoid DB churn.
+    global _hit_counts, _hit_lock
+    if _hit_lock is None:
+        # lazy import/creation for threading
+        import threading as _th
+        _hit_lock = _th.Lock()
+    try:
+        with _hit_lock:
+            _hit_counts[pattern] = _hit_counts.get(pattern, 0) + 1
+    except Exception:
+        # best-effort: if locking fails, fall back to immediate DB update
+        try:
+            conn = sqlite3.connect(db_path or _db_path(), timeout=5, check_same_thread=False)
+            conn.execute(
+                "UPDATE heuristic_rules SET hit_count=hit_count+1, updated_at=CURRENT_TIMESTAMP "
+                "WHERE pattern=? AND rule_type='keyword'",
+                (pattern,),
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+
+
+def flush_hit_counts(db_path: Optional[str] = None) -> int:
+    """Flush aggregated hit counts to the DB.
+
+    Returns the number of patterns updated.
+    """
+    global _hit_counts, _hit_lock
+    if _hit_lock is None:
+        import threading as _th
+        _hit_lock = _th.Lock()
+    with _hit_lock:
+        items = list(_hit_counts.items())
+        _hit_counts = {}
+    if not items:
+        return 0
     path = db_path or _db_path()
     try:
-        conn = sqlite3.connect(path, timeout=5, check_same_thread=False)
-        conn.execute(
-            "UPDATE heuristic_rules SET hit_count=hit_count+1, updated_at=CURRENT_TIMESTAMP "
-            "WHERE pattern=? AND rule_type='keyword'",
-            (pattern,),
-        )
+        conn = sqlite3.connect(path, timeout=10, check_same_thread=False)
+        cur = conn.cursor()
+        for pattern, cnt in items:
+            try:
+                cur.execute(
+                    "UPDATE heuristic_rules SET hit_count=hit_count+? , updated_at=CURRENT_TIMESTAMP "
+                    "WHERE pattern=? AND rule_type='keyword'",
+                    (cnt, pattern),
+                )
+            except Exception:
+                # Fallback for older schemas that don't have updated_at
+                cur.execute(
+                    "UPDATE heuristic_rules SET hit_count=hit_count+? WHERE pattern=? AND rule_type='keyword'",
+                    (cnt, pattern),
+                )
         conn.commit()
         conn.close()
-    except Exception:
-        pass
+        return len(items)
+    except Exception as exc:
+        logger.debug("flush_hit_counts failed: %s", exc)
+        return 0
 
 
 # ── Training queue → rule extraction ─────────────────────────────────────────
@@ -115,22 +172,30 @@ def retrain_from_feedback(db_path: Optional[str] = None) -> int:
         for row_id, excerpt, label in rows:
             if not excerpt or not label:
                 continue
-            # extract meaningful tokens (3+ chars, alpha)
-            tokens = [t for t in re.findall(r"[a-z]{3,}", excerpt.lower()) if t not in
-                      {"the", "and", "for", "that", "this", "with", "from", "are", "was",
-                       "has", "have", "been", "will", "shall", "not", "can", "may"}]
-            # pick the 3 most distinctive tokens
-            for token in tokens[:3]:
+            # extract meaningful tokens (3+ chars, alpha) and build bigrams
+            toks = [t for t in re.findall(r"[a-z]{3,}", excerpt.lower()) if t not in
+                    {"the", "and", "for", "that", "this", "with", "from", "are", "was",
+                     "has", "have", "been", "will", "shall", "not", "can", "may"}]
+            bigrams = [f"{toks[i]} {toks[i+1]}" for i in range(len(toks)-1)] if len(toks) >= 2 else []
+            patterns_to_add = bigrams[:3] if bigrams else toks[:3]
+            for token in patterns_to_add:
                 if token in existing_patterns:
                     continue
-                # weight based on label
                 weight = 1.0 if label.upper().startswith("YES") else \
                          0.9 if label.upper().startswith("NO") else 0.7
-                conn.execute(
-                    "INSERT OR IGNORE INTO heuristic_rules "
-                    "(rule_type, pattern, verdict, weight, source) VALUES (?, ?, ?, ?, 'training')",
-                    ("keyword", token, label.upper(), weight),
-                )
+                # Prefer INSERT OR IGNORE if schema has 'source', fall back otherwise
+                try:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO heuristic_rules "
+                        "(rule_type, pattern, verdict, weight, source) VALUES (?, ?, ?, ?, 'training')",
+                        ("keyword", token, label.upper(), weight),
+                    )
+                except Exception:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO heuristic_rules "
+                        "(rule_type, pattern, verdict, weight) VALUES (?, ?, ?, ?)",
+                        ("keyword", token, label.upper(), weight),
+                    )
                 existing_patterns.add(token)
                 added += 1
 
