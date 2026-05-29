@@ -6,7 +6,7 @@ import json
 import re
 
 from src.engine.prompts import FALLBACK_AGENT_PROMPT, RISK_AGENT_PROMPT, TECHNICAL_AGENT_PROMPT
-from src.engine.ollama_client import ollama_generate
+from src.engine.ollama_client import ollama_generate, default_model
 from src.evaluator import MultiAgentEvaluator
 
 
@@ -18,7 +18,9 @@ class AgentResult:
     confidence: float
 
 
-_HEURISTIC_EVALUATOR = MultiAgentEvaluator(model_name="llama3")
+# Use default_model() so the evaluator always picks up the best available model
+# from the company LM Studio server (10.5.65.131:1234) rather than a hardcoded name.
+_HEURISTIC_EVALUATOR = MultiAgentEvaluator(model_name=default_model())
 
 
 def _normalize_result(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -67,7 +69,9 @@ def _call_ollama(prompt: str, model_name: str, temperature: float) -> Optional[D
     return _normalize_result(payload) if payload else None
 
 
-def run_technical_agent(context: str, requirement: str = "", model_name: str = "llama3") -> Dict[str, Any]:
+def run_technical_agent(context: str, requirement: str = "", model_name: str = "") -> Dict[str, Any]:
+    if not model_name:
+        model_name = default_model()
     prompt = TECHNICAL_AGENT_PROMPT.format(requirement=requirement, context=context)
     result = _call_ollama(prompt, model_name, 0.0)
     if result:
@@ -75,7 +79,9 @@ def run_technical_agent(context: str, requirement: str = "", model_name: str = "
     return asdict(_heuristic_result(requirement, context))
 
 
-def run_risk_agent(context: str, requirement: str = "", model_name: str = "llama3") -> Dict[str, Any]:
+def run_risk_agent(context: str, requirement: str = "", model_name: str = "") -> Dict[str, Any]:
+    if not model_name:
+        model_name = default_model()
     prompt = RISK_AGENT_PROMPT.format(requirement=requirement, context=context)
     result = _call_ollama(prompt, model_name, 0.0)
     if result:
@@ -83,7 +89,9 @@ def run_risk_agent(context: str, requirement: str = "", model_name: str = "llama
     return asdict(_heuristic_result(requirement, context))
 
 
-def run_fallback_agent(context: str, requirement: str = "", model_name: str = "llama3") -> Dict[str, Any]:
+def run_fallback_agent(context: str, requirement: str = "", model_name: str = "") -> Dict[str, Any]:
+    if not model_name:
+        model_name = default_model()
     prompt = FALLBACK_AGENT_PROMPT.format(requirement=requirement, context=context)
     result = _call_ollama(prompt, model_name, 0.1)
     if result:

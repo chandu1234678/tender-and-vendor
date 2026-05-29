@@ -66,6 +66,7 @@ Build an air-gapped, production-grade system to compare 10 vendors against a mas
 
 ## Data Flow (high level)
 - Master spec Excel + vendor PDFs/Excel -> Ingestion -> Parsed cache
+
 - Parsed cache + spec -> Evaluation -> Compliance matrix
 - Compliance matrix + overrides -> Report generator -> Excel output
 

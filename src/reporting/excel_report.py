@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import copy
 import os
+import re
 import sqlite3
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -41,6 +42,8 @@ def _status_to_yn(status: Optional[str]) -> str:
 
 def _safe_set(ws, row: int, col: int, value) -> None:
     """Write value to a cell, resolving merged-cell anchors automatically."""
+    if row is None or col is None:
+        return
     cell = ws.cell(row=row, column=col)
     if isinstance(cell, MergedCell):
         # find the top-left anchor of the merged range that owns this cell
@@ -52,9 +55,41 @@ def _safe_set(ws, row: int, col: int, value) -> None:
     cell.value = value
 
 
+def _safe_file_name(name: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]", "_", name.strip())
+    return cleaned or "file"
+
+
+def _vendor_output_name(vendor_id: str, history_tag: Optional[str]) -> str:
+    safe_vendor = _safe_file_name(vendor_id)
+    if history_tag:
+        return f"vendor_{safe_vendor}_{history_tag}.xlsx"
+    return f"vendor_{safe_vendor}.xlsx"
+
+
 # ---------------------------------------------------------------------------
 # Template-aware per-vendor writer
 # ---------------------------------------------------------------------------
+
+def _normalize_vendor_name(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value or "").strip().lower())
+
+
+def _vendor_name_matches_id(vendor_name: str, vendor_id: str) -> bool:
+    normalized_name = _normalize_vendor_name(vendor_name)
+    normalized_id = _normalize_vendor_name(vendor_id)
+    if not normalized_name or not normalized_id:
+        return False
+    if normalized_name == normalized_id:
+        return True
+    if normalized_name in normalized_id or normalized_id in normalized_name:
+        return True
+    name_tokens = re.findall(r"[a-z0-9]+", normalized_name)
+    id_tokens = re.findall(r"[a-z0-9]+", normalized_id)
+    if all(token in normalized_id for token in name_tokens) or all(token in normalized_name for token in id_tokens):
+        return True
+    return False
+
 
 def _find_compliance_cols(ws, header_row: int) -> List[Dict[str, Any]]:
     """Return list of vendor column groups found in the header row.
@@ -66,17 +101,23 @@ def _find_compliance_cols(ws, header_row: int) -> List[Dict[str, Any]]:
     groups: List[Dict[str, Any]] = []
     max_col = ws.max_column
 
-    # Read vendor names from row 2 (row above header)
+    def is_compliance_header(text: str) -> bool:
+        low = text.lower()
+        return (
+            ("compliance" in low or "vendor response" in low or "bidder" in low or "response" in low)
+            and "remark" not in low
+            and "page" not in low
+        )
+
+    # Read vendor names from row above the header
     vendor_row = header_row - 1 if header_row > 1 else None
 
     col = 1
     while col <= max_col:
         val = ws.cell(row=header_row, column=col).value
-        if val and isinstance(val, str) and "compliance" in val.lower():
-            # found a compliance column – next two are Remarks and Page No.
+        if val and isinstance(val, str) and is_compliance_header(val):
             vendor_name = ""
             if vendor_row:
-                # walk up to find vendor name above this compliance col
                 for lookup_row in range(vendor_row, max(0, vendor_row - 3), -1):
                     v = ws.cell(row=lookup_row, column=col).value
                     if v and isinstance(v, str):
@@ -85,20 +126,18 @@ def _find_compliance_cols(ws, header_row: int) -> List[Dict[str, Any]]:
                             vendor_name = v.strip()
                             break
             if not vendor_name:
-                vendor_name = f"Vendor_{len(groups)+1}"
+                vendor_name = f"Vendor_{len(groups) + 1}"
             groups.append({
                 "vendor_name": vendor_name,
                 "compliance_col": col,
                 "remarks_col": col + 1 if col + 1 <= max_col else col,
                 "page_col": col + 2 if col + 2 <= max_col else col,
             })
-            col += 3  # skip the triplet
+            col += 3
         else:
             col += 1
 
-    # fallback: single-vendor sheet with no explicit "compliance" header text
     if not groups:
-        # assume col 4 = compliance, 5 = remarks, 6 = page
         groups.append({
             "vendor_name": "",
             "compliance_col": 4,
@@ -153,8 +192,11 @@ def _write_vendor_into_sheet(
         citation = str(result.get("citation") or "").strip()
         page = result.get("citation_page")
 
-        # Build remarks: prefer citation excerpt, fall back to reasoning
-        remarks = citation if citation else reasoning
+        if citation and reasoning:
+            remarks = citation if reasoning.lower() in citation.lower() else f"{citation}; {reasoning}"
+        else:
+            remarks = citation or reasoning
+
         if len(remarks) > 500:
             remarks = remarks[:497] + "..."
 
@@ -185,6 +227,26 @@ def _apply_yn_colors(ws, header_row: int, compliance_col: int) -> None:
 # Per-vendor file builder (exact template clone)
 # ---------------------------------------------------------------------------
 
+def _find_best_vendor_group(groups: List[Dict[str, Any]], vendor_id: str) -> Dict[str, Any]:
+    if not groups:
+        raise ValueError("No vendor groups available")
+    if len(groups) == 1:
+        return groups[0]
+
+    best_match = None
+    for group in groups:
+        if _vendor_name_matches_id(group.get("vendor_name", ""), vendor_id):
+            if best_match is None:
+                best_match = group
+            elif _normalize_vendor_name(group["vendor_name"]) == _normalize_vendor_name(vendor_id):
+                best_match = group
+                break
+            elif len(group.get("vendor_name", "")) > len(best_match.get("vendor_name", "")):
+                best_match = group
+
+    return best_match or groups[0]
+
+
 def _build_vendor_file(
     template_path: str,
     output_path: str,
@@ -202,16 +264,7 @@ def _build_vendor_file(
         header_row = _find_header_row(ws)
         groups = _find_compliance_cols(ws, header_row)
 
-        # For single-vendor sheets (6 cols): use the first (and only) group
-        # For multi-vendor sheets: find the group whose vendor_name matches vendor_id
-        target_group = groups[0]  # default
-        if len(groups) > 1:
-            for g in groups:
-                if g["vendor_name"].lower().replace("-", "").replace(" ", "") == \
-                   vendor_id.lower().replace("-", "").replace(" ", ""):
-                    target_group = g
-                    break
-
+        target_group = _find_best_vendor_group(groups, vendor_id)
         sheet_results = compliance_data.get(sheet_name, {})
         if not sheet_results:
             continue
@@ -287,12 +340,12 @@ def _style_matrix_wb(wb, sheet_names: List[str]) -> None:
 # Main entry point
 # ---------------------------------------------------------------------------
 
-def build_excel_report(output_path: str, db_path: str = "data/parsed/app.db") -> None:
+def build_excel_report(output_path: str, db_path: str = "data/parsed/app.db", history_tag: Optional[str] = None) -> None:
     """Build the compliance report Excel files.
 
     Produces:
-    - <output_path>                  summary matrix workbook
-    - <output_dir>/vendor_<id>.xlsx  per-vendor files cloned from template
+    - <output_path>                              summary matrix workbook
+    - <output_dir>/vendor_<id>[_<history_tag>].xlsx  per-vendor files cloned from template
     """
     conn = sqlite3.connect(db_path)
     df = pd.read_sql_query("SELECT * FROM compliance_matrix", conn)
@@ -422,5 +475,5 @@ def build_excel_report(output_path: str, db_path: str = "data/parsed/app.db") ->
         }
 
     for vendor_id, compliance_data in vendor_data.items():
-        vendor_file = os.path.join(out_dir, f"vendor_{vendor_id}.xlsx")
+        vendor_file = os.path.join(out_dir, _vendor_output_name(vendor_id, history_tag))
         _build_vendor_file(template_path, vendor_file, vendor_id, compliance_data)

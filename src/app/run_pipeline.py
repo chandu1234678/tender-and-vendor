@@ -2,7 +2,10 @@
 import logging
 import json
 import os
+import shutil
 import uuid
+import traceback
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Optional
 from src.ingest.excel_parser import parse_master_excel
@@ -353,17 +356,21 @@ def main(run_id: str | None = None, progress_cb: Optional[Callable[[float, str],
         logging.info("Dispatch stats: %s", stats)
 
         # â”€â”€ Phase 3: Build report â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        history_tag = f"{timestamp}_{run_id[:8]}"
         _update_progress(cur, conn, run_id, 91.0, "Building Excel reportâ€¦", progress_cb)
         cur.execute(
             "INSERT INTO audit_log (action, entity_type, entity_id, details) VALUES (?, ?, ?, ?)",
-            ("pipeline_complete", "run", run_id, json.dumps({"output": str(cfg_out / "vendor_comparison_matrix.xlsx")})),
+            ("pipeline_complete", "run", run_id, json.dumps({"history_tag": history_tag})),
         )
         conn.commit()
 
-    except Exception as exc:
+    except Exception:
+        error_details = traceback.format_exc()
+        logging.exception("Pipeline failed")
         cur.execute(
             "UPDATE pipeline_runs SET status=?, error=?, message=?, updated_at=CURRENT_TIMESTAMP WHERE run_id=?",
-            ("failed", str(exc), "Pipeline failed", run_id),
+            ("failed", error_details, "Pipeline failed", run_id),
         )
         conn.commit()
         raise
@@ -371,9 +378,13 @@ def main(run_id: str | None = None, progress_cb: Optional[Callable[[float, str],
         conn.close()
 
     # build report (outside the connection so it doesn't hold the lock)
-    out_path = cfg_out / "vendor_comparison_matrix.xlsx"
-    build_excel_report(str(out_path), db_path=str(cfg_db))
-    logging.info(f"Report written to {out_path}")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    history_tag = f"{timestamp}_{run_id[:8]}"
+    out_path = cfg_out / f"vendor_comparison_matrix_{history_tag}.xlsx"
+    build_excel_report(str(out_path), db_path=str(cfg_db), history_tag=history_tag)
+    latest_path = cfg_out / "vendor_comparison_matrix.xlsx"
+    shutil.copy2(out_path, latest_path)
+    logging.info(f"Report written to {out_path} and latest copy to {latest_path}")
 
     # final status update
     conn2 = get_connection(str(cfg_db))

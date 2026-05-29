@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import shutil
 import threading
 import uuid
@@ -204,8 +205,52 @@ def _db_path() -> Path:
     return PROJECT_ROOT / "data" / "parsed" / "app.db"
 
 
+def _safe_output_name(name: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]", "_", name.strip())
+    return cleaned or "file"
+
+
+def _latest_summary_report() -> Path:
+    output_dir = PROJECT_ROOT / "data" / "output"
+    candidates = sorted(
+        output_dir.glob("vendor_comparison_matrix*.xlsx"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    if candidates:
+        return candidates[0]
+    return output_dir / "vendor_comparison_matrix.xlsx"
+
+
+def _latest_vendor_report(vendor_id: str) -> Path:
+    output_dir = PROJECT_ROOT / "data" / "output"
+    safe_name = _safe_output_name(Path(vendor_id).name)
+    candidates = sorted(
+        output_dir.glob(f"vendor_{safe_name}*.xlsx"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    if candidates:
+        return candidates[0]
+    return output_dir / f"vendor_{safe_name}.xlsx"
+
+
+def _output_file_path(file_name: str) -> Path:
+    output_dir = PROJECT_ROOT / "data" / "output"
+    safe_name = Path(file_name).name
+    file_path = output_dir / safe_name
+    try:
+        if not file_path.exists():
+            raise FileNotFoundError
+        if file_path.resolve().parent != output_dir.resolve():
+            raise FileNotFoundError
+    except OSError:
+        raise HTTPException(status_code=404, detail=f"Output file not found: {file_name}")
+    return file_path
+
+
 def _report_path() -> Path:
-    return PROJECT_ROOT / "data" / "output" / "vendor_comparison_matrix.xlsx"
+    return _latest_summary_report()
 
 
 def _incoming_dir() -> Path:
@@ -745,11 +790,17 @@ def output_files_endpoint(_: None = Depends(require_localhost)) -> dict:
     return {"files": files}
 
 
+@app.get("/output/{file_name}")
+def output_file_endpoint(file_name: str, _: None = Depends(require_localhost)):
+    output_path = _output_file_path(file_name)
+    return FileResponse(str(output_path), filename=output_path.name)
+
+
 @app.get("/report/vendor/{vendor_id}")
 def vendor_report_endpoint(vendor_id: str, _: None = Depends(require_localhost)):
     """Download the per-vendor compliance file."""
     safe_name = Path(vendor_id).name  # strip any path traversal
-    vendor_path = PROJECT_ROOT / "data" / "output" / f"vendor_{safe_name}.xlsx"
+    vendor_path = _latest_vendor_report(safe_name)
     if not vendor_path.exists():
         raise HTTPException(status_code=404, detail=f"Vendor report not found: vendor_{safe_name}.xlsx")
     return FileResponse(str(vendor_path), filename=vendor_path.name)

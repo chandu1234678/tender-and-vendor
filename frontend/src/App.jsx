@@ -2,8 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   API_BASE,
   downloadAllReports,
-  downloadReport,
-  downloadVendorReport,
+  downloadOutputFile,
   getFiles,
   getOllamaStatus,
   getOutputFiles,
@@ -184,21 +183,15 @@ export default function App() {
     URL.revokeObjectURL(url)
   }
 
-  async function handleDownloadReport() {
+  async function handleDownloadFile(fileName) {
     setError(''); setMessage(''); setBusy(true)
-    try { _dl(await downloadReport(), 'vendor_comparison_matrix.xlsx'); setMessage('Download started.') }
+    try { _dl(await downloadOutputFile(fileName), fileName); setMessage(`Downloaded ${fileName}`) }
     catch (e) { setError(e.message) } finally { setBusy(false) }
   }
 
   async function handleDownloadAll() {
     setError(''); setMessage(''); setBusy(true)
     try { _dl(await downloadAllReports(), 'compliance_reports.zip'); setMessage('All reports downloaded as ZIP.') }
-    catch (e) { setError(e.message) } finally { setBusy(false) }
-  }
-
-  async function handleDownloadVendor(vendorId) {
-    setError(''); setMessage(''); setBusy(true)
-    try { _dl(await downloadVendorReport(vendorId), `vendor_${vendorId}.xlsx`); setMessage(`Downloaded vendor_${vendorId}.xlsx`) }
     catch (e) { setError(e.message) } finally { setBusy(false) }
   }
 
@@ -425,9 +418,7 @@ export default function App() {
                     <span className="muted">{f.modified_at.slice(0, 16).replace('T', ' ')}</span>
                     <div className="row-actions">
                       <button className="plain-button" type="button" disabled={busy}
-                        onClick={() => isVendor
-                          ? handleDownloadVendor(vendorId)
-                          : handleDownloadReport()}>
+                        onClick={() => handleDownloadFile(f.file_name)}>
                         ⬇ Download
                       </button>
                     </div>
