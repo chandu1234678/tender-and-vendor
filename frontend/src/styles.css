@@ -672,3 +672,68 @@ h2 {
 .ollama-down .ollama-dot {
   background: var(--danger);
 }
+
+/* ── Upload form reset & vendor badges ─────────────────────────────────── */
+.file-count-badge {
+  display: inline-block;
+  margin-left: 0.6rem;
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1px 8px;
+  vertical-align: middle;
+}
+
+.role-badge {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  border-radius: 4px;
+  padding: 1px 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.role-vendor_pdf {
+  background: #e8f0fe;
+  color: #1a56a0;
+}
+
+.role-master_workbook {
+  background: #fef3e2;
+  color: #92400e;
+}
+
+.file-row--vendor {
+  border-left: 3px solid #1a56a0;
+}
+
+.file-row--master {
+  border-left: 3px solid #92400e;
+}
+
+.hint-text {
+  margin: 0.6rem 0 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+/* ── Fresh run button state ─────────────────────────────────────────────── */
+.solid-button.inverse {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+}
+
+.solid-button.inverse:hover:not(:disabled) {
+  background: #145f5b;
+}
+
+.solid-button.inverse:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}

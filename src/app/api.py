@@ -316,6 +316,9 @@ def _set_run_state(run_id: str, status_value: str, message: str = "", progress: 
 def _run_pipeline_job(run_id: str) -> None:
     try:
         _set_run_state(run_id, "running", "Pipeline started", 0.0)
+        # Always reuse parsed PDF blocks — keeps LLM warm-up fast and avoids
+        # re-parsing PDFs that haven't changed.
+        os.environ.setdefault("FAST_REUSE_PARSED", "1")
         run_pipeline_main(run_id=run_id)
         _set_run_state(run_id, "completed", "Pipeline completed", 100.0)
     except Exception as exc:
@@ -408,6 +411,25 @@ def run_pipeline_endpoint(_: None = Depends(require_localhost)) -> dict:
         ).fetchone()
         if active:
             raise HTTPException(status_code=409, detail=f"Pipeline already active: {active[0]}")
+
+        # ── Fresh run: clear compliance results for all current incoming vendors ──
+        # PDF parse cache (parsed_documents) is intentionally kept so re-parsing
+        # is skipped and the LLM warms up faster on the next run.
+        incoming = _incoming_dir()
+        current_vendors = [p.stem for p in incoming.glob("*.pdf")]
+        if current_vendors:
+            placeholders = ",".join("?" * len(current_vendors))
+            deleted = conn.execute(
+                f"DELETE FROM compliance_matrix WHERE vendor_id IN ({placeholders})",
+                current_vendors,
+            ).rowcount
+            if deleted:
+                conn.execute(
+                    "INSERT INTO audit_log (action, entity_type, entity_id, details) VALUES (?, ?, ?, ?)",
+                    ("fresh_run_clear", "compliance_matrix", run_id,
+                     json.dumps({"vendors": current_vendors, "rows_cleared": deleted})),
+                )
+
         conn.execute(
             "INSERT OR REPLACE INTO pipeline_runs (run_id, status, progress, message, error, updated_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
             (run_id, "queued", 0.0, "Queued", ""),

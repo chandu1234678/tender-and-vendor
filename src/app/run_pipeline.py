@@ -42,11 +42,18 @@ def _citation_doc_id(vendor_id: str, top_blocks: list[dict]) -> str | None:
 
 
 def _pick_master_workbook(cfg_in: Path) -> Path | None:
-    preferred = cfg_in / "Tech_Comp_check_list.xlsx"
-    if preferred.exists():
-        return preferred
+    # Prefer the most recently modified Tech_Comp_check_list variant first,
+    # then fall back to any other .xlsx in the directory.
+    tech_variants = sorted(
+        cfg_in.glob("Tech_Comp_check_list*.xlsx"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,   # newest first
+    )
+    if tech_variants:
+        return tech_variants[0]
     candidates = sorted(
-        path for path in cfg_in.glob("*.xlsx") if path.name.lower() != "tech_comp_check_list.xlsx"
+        path for path in cfg_in.glob("*.xlsx")
+        if not path.name.lower().startswith("tech_comp_check_list")
     )
     return candidates[0] if candidates else None
 
@@ -123,6 +130,17 @@ def main(run_id: str | None = None, progress_cb: Optional[Callable[[float, str],
     finally:
         conn_for_profile.close()
 
+    # ── Optional sheet filter: PIPELINE_SHEET_FILTER=NB01,PC01 ──────────────
+    _sheet_filter_raw = os.environ.get("PIPELINE_SHEET_FILTER", "").strip()
+    if _sheet_filter_raw:
+        _allowed_sheets = {s.strip() for s in _sheet_filter_raw.split(",") if s.strip()}
+        before = len(specs)
+        specs = [s for s in specs if s.get("sheet_name", "") in _allowed_sheets]
+        logging.info(
+            "PIPELINE_SHEET_FILTER=%s: kept %d/%d specs",
+            _sheet_filter_raw, len(specs), before,
+        )
+
     fast_mode = _bool_env("FAST_MODE")
     if fast_mode:
         os.environ.setdefault("FAST_SKIP_OCR", "1")
@@ -153,6 +171,20 @@ def main(run_id: str | None = None, progress_cb: Optional[Callable[[float, str],
     if not vendor_files:
         logging.error("No vendor PDFs found in data/incoming")
         return
+
+    # ── Optional vendor filter: PIPELINE_VENDOR_FILTER=product-pdf,vendorB ──
+    _vendor_filter_raw = os.environ.get("PIPELINE_VENDOR_FILTER", "").strip()
+    if _vendor_filter_raw:
+        _allowed_vendors = {v.strip() for v in _vendor_filter_raw.split(",") if v.strip()}
+        before = len(vendor_files)
+        vendor_files = [v for v in vendor_files if v.stem in _allowed_vendors]
+        logging.info(
+            "PIPELINE_VENDOR_FILTER=%s: kept %d/%d PDFs",
+            _vendor_filter_raw, len(vendor_files), before,
+        )
+        if not vendor_files:
+            logging.error("No vendor PDFs remain after PIPELINE_VENDOR_FILTER — check PDF stem names")
+            return
 
     vendor_limit = _int_env("FAST_VENDOR_LIMIT", 0)
     if vendor_limit and len(vendor_files) > vendor_limit:

@@ -165,7 +165,12 @@ class MultiAgentEvaluator:
 
     def _heuristic_eval(self, spec_text: str, context: str) -> EvaluationResult:
         rules = self._get_rules()
-        spec_nums = re.findall(r"\d+\.?\d*", spec_text)
+        # Extract numbers WITH their unit context (e.g. "16 gb", "4800 mt/s", "32 gb").
+        # A bare number like "16" must appear followed by a non-digit/non-colon character
+        # so that "16:9" (aspect ratio) does NOT match "16 GB" (memory spec).
+        spec_nums = re.findall(r"\d+(?:\.\d+)?(?:\s*[a-zA-Z/%]+)?", spec_text)
+        # Also keep plain numbers for fallback, but only match them as whole words
+        spec_plain_nums = re.findall(r"(?<![:\d])\d+(?:\.\d+)?(?![:\d])", spec_text)
         sentences = re.split(r"(?<=[.!?])\s+", context)
         spec_hint = (spec_text or "").strip()
         if len(spec_hint) > 160:
@@ -197,14 +202,18 @@ class MultiAgentEvaluator:
                     _increment_hit(pattern, self._db_path)
 
             # ── numeric match (only if no rule matched yet) ──────────────
+            # Match "16 GB" style tokens — number + unit — not bare "16" in "16:9"
             if best_weight < 0.5:
-                for n in spec_nums:
-                    if n in s:
+                for num_token in spec_nums:
+                    # num_token may be "16 GB", "4800", "32 GB" etc.
+                    # Normalise spaces and check as substring in sentence lower
+                    normalised = re.sub(r"\s+", " ", num_token.strip().lower())
+                    if len(normalised) >= 2 and normalised in s_lower:
                         best_citation = s
                         best_status = "NEARLY OK"
                         best_confidence = 0.5
                         best_weight = 0.5
-                        best_reasoning = f"Numeric match '{n}' found; verify: {spec_hint}"
+                        best_reasoning = f"Numeric match '{num_token.strip()}' found; verify: {spec_hint}"
                         break
 
         if best_citation and len(best_citation) > 500:

@@ -192,10 +192,49 @@ def _write_vendor_into_sheet(
         citation = str(result.get("citation") or "").strip()
         page = result.get("citation_page")
 
-        if citation and reasoning:
-            remarks = citation if reasoning.lower() in citation.lower() else f"{citation}; {reasoning}"
+        # ── Build clean remarks ──────────────────────────────────────────────
+        # Only show the verbatim PDF citation in Remarks.
+        # Strip internal engine reasoning strings that are not useful to the
+        # engineer (heuristic debug text, consensus rule boilerplate, etc.)
+        _INTERNAL_PREFIXES = (
+            "heuristic token overlap",
+            "heuristic:",
+            "heuristic match:",
+            "fast evidence match:",
+            "consensus rule applied:",
+            "numeric values do not meet",
+            "rule match '",
+            "no matching clause",
+        )
+
+        def _is_internal(text: str) -> bool:
+            t = text.strip().lower()
+            return any(t.startswith(p) for p in _INTERNAL_PREFIXES)
+
+        def _clean_citation(text: str) -> str:
+            """Strip any trailing engine reasoning appended after a semicolon."""
+            _TRAILING = (
+                "; fast evidence match:",
+                "; heuristic",
+                "; consensus rule",
+                "; numeric values",
+            )
+            t = text
+            for suffix in _TRAILING:
+                idx = t.lower().find(suffix)
+                if idx > 0:
+                    t = t[:idx].strip()
+            return t
+
+        # Use citation as the remark if it looks like a real PDF excerpt
+        # (not an internal reasoning string). Fall back to a cleaned reasoning
+        # only if it doesn't look like debug output.
+        if citation and not _is_internal(citation):
+            remarks = _clean_citation(citation)
+        elif reasoning and not _is_internal(reasoning):
+            remarks = reasoning
         else:
-            remarks = citation or reasoning
+            remarks = ""   # no useful citation — leave blank for human review
 
         if len(remarks) > 500:
             remarks = remarks[:497] + "..."

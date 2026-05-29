@@ -131,12 +131,90 @@ def _score_block_with_index(spec_counts: Counter, block_counts: Counter, block_l
     return score
 
 
+def _extract_spec_numbers(text: str) -> set:
+    """Extract numbers with their unit context to avoid false ratio matches.
+
+    "Minimum 16 GB DDR5 RAM 4800 MT/s" → {"16 gb", "4800 mt/s", "32 gb"}
+    "Native aspect ratio 16:9"          → {} (16:9 is a ratio, not a spec value)
+
+    A number is considered a spec value when it is:
+      - followed by a unit (letters/%) with optional space, OR
+      - a standalone integer not immediately followed or preceded by ':'
+    """
+    results: set = set()
+    # Match number + unit (e.g. "16 GB", "4800MT/s", "1 TB", "230V")
+    for m in re.finditer(r"(\d+(?:\.\d+)?)\s*([a-zA-Z/%]+)", text):
+        results.add(f"{m.group(1)} {m.group(2).lower()}")
+    # Match standalone numbers not part of a ratio (not preceded/followed by ':')
+    for m in re.finditer(r"(?<![:\d\.])(\d+(?:\.\d+)?)(?![:\d])", text):
+        results.add(m.group(1))
+    return results
+
+
+def _numeric_magnitude_ok(requirement: str, evidence_text: str) -> bool:
+    """Check that every number+unit in the requirement is satisfied by the evidence.
+
+    For specs with "minimum", "or higher", "or more", "at least":
+      evidence value must be >= requirement value (same unit).
+    For all other specs:
+      evidence value must be >= requirement value (lenient — catches "equivalent").
+
+    Returns True if all requirement numbers are satisfied or if no numbers found.
+    Returns False if any required number is clearly NOT met (e.g. 1 MB vs 12 MB).
+    """
+    req_lower = requirement.lower()
+    is_minimum = any(kw in req_lower for kw in (
+        "minimum", "or higher", "or more", "at least", "min ", "min.", "upto", "up to"
+    ))
+
+    # Extract (value, unit) pairs from requirement
+    req_pairs: List[Tuple[float, str]] = []
+    for m in re.finditer(r"(\d+(?:\.\d+)?)\s*([a-zA-Z]+)", requirement):
+        try:
+            req_pairs.append((float(m.group(1)), m.group(2).lower()))
+        except ValueError:
+            pass
+
+    if not req_pairs:
+        return True  # no numeric requirement to check
+
+    ev_lower = evidence_text.lower()
+    for req_val, req_unit in req_pairs:
+        # Find all evidence values with the same unit
+        ev_vals: List[float] = []
+        for m in re.finditer(
+            r"(\d+(?:\.\d+)?)\s*" + re.escape(req_unit) + r"\b",
+            ev_lower,
+        ):
+            try:
+                ev_vals.append(float(m.group(1)))
+            except ValueError:
+                pass
+
+        if not ev_vals:
+            # Unit not found in evidence at all — can't confirm
+            continue
+
+        best_ev = max(ev_vals)
+        if is_minimum:
+            # Evidence must meet or exceed the requirement
+            if best_ev < req_val:
+                return False
+        else:
+            # Exact or better — evidence must be >= requirement
+            if best_ev < req_val * 0.9:  # 10% tolerance for rounding
+                return False
+
+    return True
+
+
 def _verify_citation(citation: str, top_blocks_norm: Sequence[str], fallback: str = "") -> str:
+    """Return citation if it appears verbatim in one of the top blocks, else fallback."""
     normalized = _normalize_text(citation)
     if not normalized:
         return fallback
     for block_text in top_blocks_norm:
-        if normalized and normalized in block_text:
+        if normalized in block_text:
             return citation
     return fallback
 
@@ -201,8 +279,8 @@ def _quick_evidence_verdict(requirement: str, top_blocks: Sequence[Dict[str, Any
 
     overlap = req_tokens & evidence_tokens
     overlap_ratio = len(overlap) / max(1, len(req_tokens))
-    req_numbers = set(re.findall(r"\d+(?:\.\d+)?", requirement))
-    evidence_numbers = set(re.findall(r"\d+(?:\.\d+)?", text))
+    req_numbers = _extract_spec_numbers(requirement)
+    evidence_numbers = _extract_spec_numbers(text)
     numbers_ok = not req_numbers or req_numbers <= evidence_numbers
 
     if overlap_ratio >= 0.18 and numbers_ok:
@@ -235,8 +313,8 @@ def _heuristic_overlap_eval(
 
     overlap = spec_tokens & block_tokens
     overlap_ratio = len(overlap) / max(1, len(spec_tokens))
-    req_numbers = set(re.findall(r"\d+(?:\.\d+)?", requirement))
-    evidence_numbers = set(re.findall(r"\d+(?:\.\d+)?", text))
+    req_numbers = _extract_spec_numbers(requirement)
+    evidence_numbers = _extract_spec_numbers(text)
     numbers_ok = not req_numbers or req_numbers <= evidence_numbers
 
     yes_threshold = _float_env("HEURISTIC_YES_RATIO", 0.25)
@@ -354,18 +432,32 @@ def dispatch_spec_vendor(
     if fast:
         _record_dispatch("fast")
         best = top_blocks[0] if top_blocks else {}
+        best_text = best.get("text", "")
         spec_tokens = set(_tokenize(requirement))
-        block_tokens = set(_tokenize(best.get("text", "")))
+        block_tokens = set(_tokenize(best_text))
         overlap = spec_tokens & block_tokens
         score = (len(overlap) / max(1, len(spec_tokens))) if spec_tokens else 0.0
-        status = "YES" if score >= 0.2 else "NO"
+
+        # Numeric magnitude check: "1 MB cache" must NOT satisfy "12 MB cache or higher"
+        magnitude_ok = _numeric_magnitude_ok(requirement, best_text)
+
+        if score >= 0.2 and magnitude_ok:
+            status = "YES"
+        elif score >= 0.2 and not magnitude_ok:
+            status = "NO"   # token overlap but numbers don't satisfy requirement
+        else:
+            status = "NO"
+
         return {
             "spec_id": spec_id,
             "vendor_id": vendor_id,
             "status": status,
-            "citation": best.get("text", ""),
-            "reasoning": f"heuristic token overlap {len(overlap)} tokens",
-            "confidence": float(min(0.99, max(0.0, score))),
+            "citation": best_text,
+            "reasoning": (
+                f"heuristic token overlap {len(overlap)} tokens"
+                + ("" if magnitude_ok else "; numeric values do not meet requirement")
+            ),
+            "confidence": float(min(0.99, max(0.0, score))) if magnitude_ok else 0.85,
             "citation_page": best.get("page"),
             "citation_bbox": best.get("bbox"),
             "technical": {},

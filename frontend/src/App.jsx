@@ -56,6 +56,7 @@ function ProgressBar({ value, status }) {
 export default function App() {
   const [masterFile, setMasterFile] = useState(null)
   const [vendorFiles, setVendorFiles] = useState([])
+  const [uploadKey, setUploadKey] = useState(0)
   const [files, setFiles] = useState([])
   const [outputFiles, setOutputFiles] = useState([])
   const [summary, setSummary] = useState(null)
@@ -148,20 +149,28 @@ export default function App() {
     setBusy(true)
     try {
       const p = await uploadFiles([masterFile, ...vendorFiles.filter(Boolean)])
-      setMessage(`Uploaded ${p.saved.length} file(s).`)
+      setMessage(`Uploaded ${p.saved.length} file(s). Ready to run pipeline.`)
+      // Reset upload form so stale files don't persist
+      setMasterFile(null)
+      setVendorFiles([])
+      // Reset the file inputs by clearing their values via key trick
+      setUploadKey(k => k + 1)
       await refreshDashboard()
     } catch (e) { setError(e.message) } finally { setBusy(false) }
   }
 
   async function handleRunPipeline() {
     setError(''); setMessage(''); setBusy(true)
+    // Clear stale results from previous run immediately in the UI
+    setResults([])
+    setSummary(null)
     try {
       const p = await runPipeline()
       setRunId(p.run_id)
       setRunStatus(p.status || 'queued')
-      setRunProgress(0); setRunMessage('Queued')
+      setRunProgress(0); setRunMessage('Queued — clearing old results and starting fresh…')
       startTimeRef.current = Date.now(); setElapsed(0)
-      setMessage('Pipeline started.')
+      setMessage('Pipeline started — fresh run for current vendors.')
     } catch (e) { setError(e.message) } finally { setBusy(false) }
   }
 
@@ -285,7 +294,7 @@ export default function App() {
           <div className="panel">
             <h2>Upload</h2>
             <label className="field-label" htmlFor="master-file">Master workbook (.xlsx)</label>
-            <input id="master-file" className="file-input" type="file" accept=".xlsx"
+            <input key={`master-${uploadKey}`} id="master-file" className="file-input" type="file" accept=".xlsx"
               onChange={(e) => setMasterFile(e.target.files?.[0] || null)} />
             <div className="file-name">
               {masterFile ? masterFile.name : 'No master workbook selected'}
@@ -298,7 +307,7 @@ export default function App() {
 
             <div className="vendor-list">
               {vendorFiles.length ? vendorFiles.map((file, index) => (
-                <div className="vendor-row" key={`vendor-${index}`}>
+                <div className="vendor-row" key={`vendor-${uploadKey}-${index}`}>
                   <input className="file-input" type="file" accept=".pdf"
                     onChange={(e) => updateVendorFile(index, e.target.files?.[0] || null)} />
                   <div className="file-name">
@@ -312,26 +321,46 @@ export default function App() {
 
             <div className="actions">
               <button className="solid-button" type="button"
-                onClick={handleUpload} disabled={busy}>Upload Files</button>
+                onClick={handleUpload} disabled={busy || (!masterFile && !selectedCount)}>
+                Upload Files
+              </button>
               <button className="solid-button inverse" type="button"
-                onClick={handleRunPipeline} disabled={busy || isActive}>Run Pipeline</button>
+                onClick={handleRunPipeline} disabled={busy || isActive}
+                title="Clears previous results for current vendors and runs fresh">
+                ▶ Run Pipeline (Fresh)
+              </button>
               <button className="plain-button danger" type="button"
                 onClick={handleResetPipeline} disabled={busy}
-                title="Clear any stuck pipeline run">Reset Pipeline</button>
+                title="Clear any stuck pipeline run">Reset Stuck Run</button>
             </div>
           </div>
 
           <div className="panel">
-            <h2>Incoming Files</h2>
+            <h2>Incoming Files
+              {files.length > 0 && (
+                <span className="file-count-badge">
+                  {files.filter(f => f.role === 'vendor_pdf').length} vendor{files.filter(f => f.role === 'vendor_pdf').length !== 1 ? 's' : ''}
+                  {' · '}
+                  {files.filter(f => f.role === 'master_workbook').length} workbook
+                </span>
+              )}
+            </h2>
             <div className="file-table">
               {files.length ? files.map((file) => (
-                <div className="file-row" key={file.file_name}>
+                <div className={`file-row ${file.role === 'vendor_pdf' ? 'file-row--vendor' : 'file-row--master'}`}
+                  key={file.file_name}>
                   <strong>{file.file_name}</strong>
-                  <span>{file.role}</span>
+                  <span className={`role-badge role-${file.role}`}>{file.role === 'vendor_pdf' ? 'Vendor PDF' : 'Master Spec'}</span>
                   <span>{Math.round(file.size_bytes / 1024)} KB</span>
                 </div>
               )) : <div className="empty-line">No incoming files loaded.</div>}
             </div>
+            {files.filter(f => f.role === 'vendor_pdf').length > 0 && (
+              <p className="hint-text">
+                ▶ Run Pipeline will evaluate all {files.filter(f => f.role === 'vendor_pdf').length} vendor(s) fresh.
+                PDF parse cache is preserved for speed.
+              </p>
+            )}
           </div>
         </section>
 
