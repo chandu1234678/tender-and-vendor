@@ -737,3 +737,20 @@ h2 {
   opacity: 0.45;
   cursor: not-allowed;
 }
+
+/* ── Incoming file delete button ────────────────────────────────────────── */
+.icon-button {
+  padding: 2px 7px;
+  font-size: 0.75rem;
+  line-height: 1;
+  border-radius: 4px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}

@@ -371,6 +371,30 @@ def files_endpoint(_: None = Depends(require_localhost)) -> dict:
     return {"incoming": files}
 
 
+@app.delete("/files/{file_name}")
+def delete_incoming_file(file_name: str, _: None = Depends(require_localhost)) -> dict:
+    """Remove a file from data/incoming so it won't be picked up by the next pipeline run."""
+    safe_name = Path(file_name).name          # strip any path traversal
+    target = _incoming_dir() / safe_name
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"File not found: {safe_name}")
+    if not target.is_file():
+        raise HTTPException(status_code=400, detail=f"Not a file: {safe_name}")
+    # Prevent deleting the master workbook while a pipeline is running
+    _ensure_app_db()
+    conn = get_connection(str(_db_path()))
+    try:
+        active = conn.execute(
+            "SELECT run_id FROM pipeline_runs WHERE status IN ('queued','running') LIMIT 1"
+        ).fetchone()
+    finally:
+        conn.close()
+    if active:
+        raise HTTPException(status_code=409, detail="Cannot delete files while pipeline is running")
+    target.unlink()
+    return {"deleted": safe_name}
+
+
 @app.post("/upload", response_model=UploadResponse)
 def upload_files(files: list[UploadFile] = File(...), _: None = Depends(require_localhost)) -> dict:
     incoming = PROJECT_ROOT / "data" / "incoming"

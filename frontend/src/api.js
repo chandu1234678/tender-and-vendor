@@ -132,4 +132,9 @@ export async function getOutputFiles() {
   return response.json()
 }
 
+export async function deleteIncomingFile(fileName) {
+  const response = await request(`/files/${encodeURIComponent(fileName)}`, { method: 'DELETE' })
+  return response.json()
+}
+
 export { API_BASE }

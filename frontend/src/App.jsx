@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   API_BASE,
+  deleteIncomingFile,
   downloadAllReports,
   downloadOutputFile,
   getFiles,
@@ -171,6 +172,16 @@ export default function App() {
       setRunProgress(0); setRunMessage('Queued — clearing old results and starting fresh…')
       startTimeRef.current = Date.now(); setElapsed(0)
       setMessage('Pipeline started — fresh run for current vendors.')
+    } catch (e) { setError(e.message) } finally { setBusy(false) }
+  }
+
+  async function handleDeleteIncomingFile(fileName) {
+    if (!window.confirm(`Remove "${fileName}" from incoming? This cannot be undone.`)) return
+    setError(''); setMessage(''); setBusy(true)
+    try {
+      await deleteIncomingFile(fileName)
+      setMessage(`Removed ${fileName} from incoming.`)
+      await refreshDashboard()
     } catch (e) { setError(e.message) } finally { setBusy(false) }
   }
 
@@ -352,6 +363,14 @@ export default function App() {
                   <strong>{file.file_name}</strong>
                   <span className={`role-badge role-${file.role}`}>{file.role === 'vendor_pdf' ? 'Vendor PDF' : 'Master Spec'}</span>
                   <span>{Math.round(file.size_bytes / 1024)} KB</span>
+                  <button
+                    className="plain-button danger icon-button"
+                    type="button"
+                    title={`Remove ${file.file_name} from incoming`}
+                    disabled={busy || isActive}
+                    onClick={() => handleDeleteIncomingFile(file.file_name)}>
+                    ✕
+                  </button>
                 </div>
               )) : <div className="empty-line">No incoming files loaded.</div>}
             </div>
